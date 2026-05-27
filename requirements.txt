@@ -5,6 +5,9 @@ databricks-sql-connector>=3.0
 pyyaml>=6.0
 pandas>=2.0
 
+# Milestone 4.5.1 — DQ metamodel (Pydantic v2).
+pydantic>=2.6,<3
+
 # Milestone 2+ — uncomment when we wire up profiling.
 # ydata-profiling[pyspark]>=4.12
 # scipy>=1.11

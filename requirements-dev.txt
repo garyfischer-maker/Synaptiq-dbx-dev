@@ -1,0 +1,5 @@
+# Dev-only dependencies. Not deployed to the Databricks App.
+-r requirements.txt
+
+pytest>=7.4
+pytest-cov>=4.1
