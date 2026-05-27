@@ -1,0 +1,12 @@
+# Milestone 1 (skeleton) dependencies.
+streamlit>=1.32,<2.0
+databricks-sdk>=0.28
+databricks-sql-connector>=3.0
+pyyaml>=6.0
+pandas>=2.0
+
+# Milestone 2+ — uncomment when we wire up profiling.
+# ydata-profiling[pyspark]>=4.12
+# scipy>=1.11
+# openpyxl>=3.1
+# pyspark is provided by the Databricks Apps runtime; do not pin here.

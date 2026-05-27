@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local mock output folder (PROFILER_RUNTIME=mock)
+_mock_runs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

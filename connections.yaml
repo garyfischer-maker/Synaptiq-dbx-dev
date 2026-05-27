@@ -1,0 +1,37 @@
+# Connections the app can read from.
+#
+# Each connection points at one or more catalogs. Two connection types:
+#
+#   native       — a catalog local to this workspace's metastore.
+#   delta_share  — a shared catalog mounted via Databricks-to-Databricks
+#                  Delta Sharing (only needed when an env lives in a
+#                  different workspace/metastore).
+#
+# Current setup: TEST and PROD are both catalogs in the SAME workspace, so
+# both are `native`. No Delta Sharing required.
+
+connections:
+  - name: "PROD (local)"
+    type: native
+    env_label: PROD
+    catalogs: ["prod_main"]      # scope this connection to the PROD catalog
+
+  - name: "TEST (local)"
+    type: native
+    env_label: TEST
+    catalogs: ["test_main"]      # scope this connection to the TEST catalog
+
+  # If a future env lives in a different workspace, add a delta_share entry.
+  # See README §4 for the D2D Delta Sharing setup steps.
+  # - name: "DEV (shared)"
+  #   type: delta_share
+  #   env_label: DEV
+  #   catalogs: ["dev_sh"]
+
+# Env labels offered in the UI dropdown.
+env_labels:
+  - PROD
+  - STAGE
+  - QA
+  - TEST
+  - DEV
