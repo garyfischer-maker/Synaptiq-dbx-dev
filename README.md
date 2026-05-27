@@ -185,3 +185,4 @@ Or use the Databricks Apps UI: create app → point at this folder → review
   storage; coordinate with whoever owns the CMK.
 - **Row-level diff across shared catalogs** is slower than native — push down
   filters (date, partition col) before joining.
+test
