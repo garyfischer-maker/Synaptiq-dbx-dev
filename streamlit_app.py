@@ -58,6 +58,130 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---------------------------------------------------------------------------
+# Synaptiq brand styling
+# Palette extracted from AIQ deck (April 2022):
+#   Synaptiq Blue  #8BA4BD  — steel blue, dominant brand colour
+#   Synaptiq Amber #C8956A  — warm copper-orange accent
+#   Charcoal       #2D3748  — primary text
+#   Off-white      #EEF3F8  — secondary backgrounds
+
+st.markdown("""
+<style>
+/* ── Brand header bar ─────────────────────────────────────────── */
+.synaptiq-header {
+    background: linear-gradient(135deg, #8BA4BD 0%, #6B8EAD 100%);
+    padding: 1.1rem 2rem 0.9rem 2rem;
+    border-radius: 8px;
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.synaptiq-logo-mark {
+    width: 38px; height: 38px;
+    border: 2.5px solid rgba(200,149,106,0.9);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: #C8956A;
+    flex-shrink: 0;
+}
+.synaptiq-wordmark {
+    color: #FFFFFF;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+}
+.synaptiq-tagline {
+    color: rgba(255,255,255,0.72);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 2px;
+}
+.synaptiq-product {
+    margin-left: auto;
+    text-align: right;
+}
+.synaptiq-product-name {
+    color: #C8956A;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ── Tab styling ──────────────────────────────────────────────── */
+div[data-testid="stTabs"] button[role="tab"] {
+    font-weight: 600;
+    font-size: 0.92rem;
+    letter-spacing: 0.03em;
+    color: #6B8EAD;
+}
+div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    color: #C8956A !important;
+    border-bottom: 3px solid #C8956A;
+}
+
+/* ── Metric tiles ─────────────────────────────────────────────── */
+div[data-testid="metric-container"] {
+    background: #EEF3F8;
+    border-left: 4px solid #8BA4BD;
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+}
+div[data-testid="metric-container"] label {
+    color: #6B8EAD;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+div[data-testid="metric-container"] div[data-testid="metric-value"] {
+    color: #2D3748;
+    font-weight: 700;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────── */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #8BA4BD 0%, #7A96B0 100%);
+}
+section[data-testid="stSidebar"] * {
+    color: #FFFFFF !important;
+}
+section[data-testid="stSidebar"] .streamlit-expanderHeader {
+    color: rgba(255,255,255,0.85) !important;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+div[data-testid="stButton"] > button[kind="primary"] {
+    background: #C8956A;
+    border: none;
+    color: white;
+    font-weight: 600;
+    border-radius: 6px;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+    background: #B8845A;
+    border: none;
+}
+
+/* ── Section subheaders ───────────────────────────────────────── */
+h3 { color: #8BA4BD; }
+h4 { color: #6B8EAD; }
+
+/* ── Divider accent ───────────────────────────────────────────── */
+hr { border-top: 1px solid #C8956A33; }
+
+/* ── Success / info boxes ─────────────────────────────────────── */
+div[data-testid="stAlert"][data-type="success"] {
+    border-left: 4px solid #C8956A;
+    background: #FDF5EE;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Cached data loaders
@@ -300,7 +424,14 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 # Sidebar
 
 def _sidebar():
-    st.sidebar.title("Synaptiq DQ Platform")
+    st.sidebar.markdown("""
+<div style='text-align:center; padding: 0.5rem 0 0.8rem 0;'>
+  <div style='font-size:1.1rem; font-weight:700; letter-spacing:0.05em;
+              color:#FFFFFF;'>Synaptiq</div>
+  <div style='font-size:0.62rem; letter-spacing:0.14em; text-transform:uppercase;
+              color:rgba(255,255,255,0.65); margin-top:2px;'>Data Quality Platform</div>
+</div>
+""", unsafe_allow_html=True)
     st.sidebar.divider()
     with st.sidebar.expander("Recent runs", expanded=False):
         vol = st.session_state.get("output_volume")
@@ -319,7 +450,19 @@ _sidebar()
 # ---------------------------------------------------------------------------
 # Main layout
 
-st.title("⚖️ Synaptiq Data Quality Platform")
+st.markdown("""
+<div class="synaptiq-header">
+  <div class="synaptiq-logo-mark">&#9678;</div>
+  <div>
+    <div class="synaptiq-wordmark">Synaptiq</div>
+    <div class="synaptiq-tagline">The Humankind of AI</div>
+  </div>
+  <div class="synaptiq-product">
+    <div class="synaptiq-product-name">Data Quality Platform</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.caption(
     "Profile Unity Catalog tables and surface data quality issues. "
     "Compare two tables to detect schema drift and statistical distribution shift."
