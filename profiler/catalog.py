@@ -188,15 +188,23 @@ def _dbx_list_volumes(catalog: str, schema: str) -> List[str]:
 
 _MOCK = {
     "dev": {
+        # Profiler output volume
         "test_main_profiler":  {"_volumes": ["ab_runs"]},
+        # Tuva input layer — claims domain
+        "test_main_claims":    ["medical_claim", "pharmacy_claim", "provider_attribution", "location", "practitioner"],
+        "prod_main_claims":    ["medical_claim", "pharmacy_claim", "provider_attribution", "location", "practitioner"],
+        # Tuva input layer — clinical domain
+        "test_main_clinical":  ["encounter", "condition", "procedure", "lab_result", "observation", "medication", "immunization", "appointment", "location", "practitioner"],
+        "prod_main_clinical":  ["encounter", "condition", "procedure", "lab_result", "observation", "medication", "immunization", "appointment", "location", "practitioner"],
+        # Tuva input layer — members domain
+        "test_main_members":   ["eligibility", "patient", "location", "practitioner"],
+        "prod_main_members":   ["eligibility", "patient", "location", "practitioner"],
+        # Other domain schemas (non-Tuva)
         "test_main_sales":     ["orders", "order_items", "customers", "products"],
         "test_main_finance":   ["invoices", "payments", "ledger"],
-        "test_main_inventory": ["items", "warehouses", "stock_levels"],
         "prod_main_sales":     ["orders", "order_items", "customers", "products"],
         "prod_main_finance":   ["invoices", "payments", "ledger"],
-        "prod_main_inventory": ["items", "warehouses", "stock_levels"],
         "qa_main_sales":       ["orders", "customers"],
-        "qa_main_finance":     ["invoices", "payments"],
         "stage_main_sales":    ["orders", "customers", "products"],
         "dev_sandbox":         ["experiment_a", "experiment_b", "scratch"],
     }
