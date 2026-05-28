@@ -1,0 +1,48 @@
+name: Tests
+
+# Runs on every PR targeting main, and on direct pushes to main
+# (the push trigger catches admin pushes that bypass PRs).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Run all matrix entries even if one fails — easier to see whether a
+      # failure is Python-version-specific or universal.
+      fail-fast: false
+      matrix:
+        # Databricks Apps runtime currently uses 3.10/3.11; test both.
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --cov=profiler --cov-report=term-missing
+
+      # Surface coverage as a step summary so it shows up at the top of the
+      # GitHub Actions run page without clicking into logs.
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "### Test results (Python ${{ matrix.python-version }})" >> $GITHUB_STEP_SUMMARY
+          pytest tests/ --cov=profiler --cov-report=term --tb=no -q >> $GITHUB_STEP_SUMMARY 2>&1 || true
