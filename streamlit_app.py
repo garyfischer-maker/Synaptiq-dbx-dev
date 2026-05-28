@@ -32,6 +32,8 @@ from profiler.catalog import (
     load_connections,
     load_env_labels,
 )
+from profiler.compare import compare_tables
+from profiler.excel import write_workbook
 from profiler.manifest import ComparisonParams, SideSpec, new_manifest
 from profiler.metamodel import DatasetProfile, Lineage, ProfilerRun, new_run_id
 from profiler.profile import profile_table
@@ -479,19 +481,29 @@ if run_now and st.session_state.get("validated", False):
 
             manifest_path = write_json(folder, "manifest.json", manifest.to_dict())
 
-            # Phase 3: metamodel, Mermaid, Delta repo
+            # Phase 3: schema diff + Excel workbook
+            with st.spinner("Comparing schemas and writing Excel summary …"):
+                comparisons = compare_tables(dataset_a, dataset_b)
+
             profiler_run = ProfilerRun(
                 run_id=new_run_id(),
                 run_label=run_label or None,
                 created_utc=datetime.now(timezone.utc),
                 side_a=dataset_a,
                 side_b=dataset_b,
+                comparisons=comparisons,
                 lineage=Lineage(
                     manifest="manifest.json",
                     html_profile_a="profile_a.html",
                     html_profile_b="profile_b.html",
+                    excel_summary="ab_summary.xlsx",
                 ),
             )
+
+            excel_path = write_workbook(folder, profiler_run)
+            manifest.add_artifact("ab_summary.xlsx")
+
+            # Phase 4: metamodel, Mermaid, Delta repo
 
             write_metamodel(folder, profiler_run)
             write_json_schema(folder)
@@ -507,6 +519,10 @@ if run_now and st.session_state.get("validated", False):
                 except Exception as exc:  # noqa: BLE001
                     st.warning(f"Delta repo ingest skipped: {exc}")
 
+            from profiler.compare import schema_change_counts
+            changes = schema_change_counts(comparisons)
+            n_changes = sum(v for k, v in changes.items() if k != "unchanged")
+
             st.success(f"Run complete: `{folder.folder_name}`")
             st.markdown(
                 f"- Side A: **{dataset_a.row_count:,}** rows, "
@@ -515,7 +531,11 @@ if run_now and st.session_state.get("validated", False):
                 f"- Side B: **{dataset_b.row_count:,}** rows, "
                 f"**{dataset_b.column_count}** columns, "
                 f"**{sum(len(c.alerts) for c in dataset_b.columns)}** alerts  \n"
-                f"- Profiling time: **{t_profiled:.1f}s**"
+                f"- Schema changes: **{n_changes}** "
+                f"({changes['added']} added, {changes['removed']} removed, "
+                f"{changes['type_changed']} type changed)  \n"
+                f"- Profiling time: **{t_profiled:.1f}s**  \n"
+                f"- Excel summary: `ab_summary.xlsx`"
             )
             st.code(manifest_path, language="text")
 
