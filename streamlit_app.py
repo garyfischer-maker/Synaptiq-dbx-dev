@@ -485,6 +485,16 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 # Sidebar
 
 def _sidebar():
+    # TEMP: show app identity so we can find the SP to grant permissions.
+    # Remove this block once grants are done.
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        me = w.current_user.me()
+        st.sidebar.info(f"**App identity:**\n\n`{me.user_name}`\n\n`{me.id}`")
+    except Exception as exc:
+        st.sidebar.warning(f"Identity lookup failed: {exc}")
+
     st.sidebar.markdown("""
 <div style='text-align:center; padding: 0.5rem 0 0.8rem 0;'>
   <div style='font-size:1.1rem; font-weight:700; letter-spacing:0.05em;
