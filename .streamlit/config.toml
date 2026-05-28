@@ -1,0 +1,10 @@
+[theme]
+# Synaptiq brand palette — extracted from AIQ deck (April 2022)
+# Primary: Synaptiq amber (warm copper-orange accent)
+# Secondary background: soft blue-grey offset
+# Text: dark charcoal for readability on white
+primaryColor     = "#C8956A"   # Synaptiq amber — buttons, links, highlights
+backgroundColor  = "#FFFFFF"   # Main canvas
+secondaryBackgroundColor = "#EEF3F8"  # Sidebar + expanders — Synaptiq blue tinted
+textColor        = "#2D3748"   # Dark charcoal
+font             = "sans serif"
