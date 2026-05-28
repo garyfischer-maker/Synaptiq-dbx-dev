@@ -661,7 +661,10 @@ with tab_compare:
             for m in msgs:
                 st.markdown(m)
             st.session_state["cmp_validated"] = ok
-            st.success("Ready to run.") if ok else st.error("Fix issues above.")
+            if ok:
+                st.success("Ready to run.")
+            else:
+                st.error("Fix issues above.")
 
     # -- Run --
     if cmp_run and st.session_state.get("cmp_validated", False):
@@ -866,7 +869,10 @@ with tab_profile:
             for m in msgs:
                 st.markdown(m)
             st.session_state["prf_validated"] = ok
-            st.success("Ready to run.") if ok else st.error("Fix issues above.")
+            if ok:
+                st.success("Ready to run.")
+            else:
+                st.error("Fix issues above.")
 
     # -- Run --
     if prf_run and st.session_state.get("prf_validated", False):
