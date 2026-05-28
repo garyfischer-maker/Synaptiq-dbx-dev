@@ -31,7 +31,7 @@ env:
     # profiler/storage.py for details.
 
   - name: "DATABRICKS_WAREHOUSE_ID"
-    valueFrom: "sql-warehouse"
+    value: "2ad65b4df5cd3a9e"
 
   - name: "PROFILER_RUNTIME"
     value: "databricks"           # set to "mock" for local dev
