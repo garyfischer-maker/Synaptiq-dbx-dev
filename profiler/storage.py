@@ -66,7 +66,19 @@ def make_run_folder(
 def ensure_run_folder(folder: RunFolder) -> None:
     """Create the run folder. In mock mode, creates under ./_mock_runs."""
     target = _mock_rewrite(folder.path)
-    Path(target).mkdir(parents=True, exist_ok=True)
+    try:
+        Path(target).mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        vol = folder.volume
+        raise PermissionError(
+            f"Cannot write to UC Volume at {target}. "
+            f"Ensure the volume exists and the app SP has WRITE VOLUME:\n"
+            f"  CREATE SCHEMA IF NOT EXISTS {vol.catalog}.{vol.schema};\n"
+            f"  CREATE VOLUME  IF NOT EXISTS {vol.catalog}.{vol.schema}.{vol.volume};\n"
+            f"  GRANT WRITE VOLUME ON VOLUME {vol.catalog}.{vol.schema}.{vol.volume} "
+            f"TO `<app-sp>`;\n"
+            f"Then redeploy the app so the FUSE mount is refreshed."
+        ) from None
 
 
 def write_text(folder: RunFolder, filename: str, content: str) -> str:
