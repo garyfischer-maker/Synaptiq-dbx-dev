@@ -884,7 +884,7 @@ def gen_procedures(encounters_df: pd.DataFrame, seed: int) -> pd.DataFrame:
     rows = []
     n_enc = len(encounters_df)
     enc_records = encounters_df[["encounter_id","person_id","patient_id",
-                                  "encounter_start_date"]].to_dict("records")
+                                  "encounter_start_date","encounter_end_date"]].to_dict("records")
 
     procs_per_enc = rng.integers(1, 4, size=n_enc)  # 1-3 procedures avg ~2
 
