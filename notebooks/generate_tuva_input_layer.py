@@ -289,9 +289,23 @@ def write_delta(pdf: pd.DataFrame, catalog: str, schema: str, table: str) -> Non
 
     Overwrites the table and schema each call (idempotent for reruns).
     Prints row count after write.
+
+    NullType guard: Spark infers all-None columns as NullType, which Parquet
+    cannot physically store — causing a schema mismatch in Catalog Explorer.
+    Any NullType column is cast to StringType (nullable) before writing so
+    the column exists in both the Delta metadata and the Parquet files.
     """
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import NullType, StringType
+
     full_name = f"`{catalog}`.`{schema}`.`{table}`"
     sdf = spark.createDataFrame(pdf)
+
+    # Cast any all-None (NullType) columns to StringType so Parquet can store them.
+    null_cols = [f.name for f in sdf.schema.fields if isinstance(f.dataType, NullType)]
+    for col_name in null_cols:
+        sdf = sdf.withColumn(col_name, F.lit(None).cast(StringType()))
+
     (sdf.write
         .format("delta")
         .mode("overwrite")
@@ -884,7 +898,7 @@ def gen_procedures(encounters_df: pd.DataFrame, seed: int) -> pd.DataFrame:
     rows = []
     n_enc = len(encounters_df)
     enc_records = encounters_df[["encounter_id","person_id","patient_id",
-                                  "encounter_start_date"]].to_dict("records")
+                                  "encounter_start_date","encounter_end_date"]].to_dict("records")
 
     procs_per_enc = rng.integers(1, 4, size=n_enc)  # 1-3 procedures avg ~2
 

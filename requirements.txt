@@ -8,8 +8,8 @@ pandas>=2.0
 # Milestone 4.5.1 — DQ metamodel (Pydantic v2).
 pydantic>=2.6,<3
 
-# Milestone 2+ — uncomment when we wire up profiling.
-# ydata-profiling[pyspark]>=4.12
-# scipy>=1.11
-# openpyxl>=3.1
+# Milestone 2 — profiling engine.
+ydata-profiling[pyspark]>=4.12
+scipy>=1.11
+# openpyxl>=3.1   -- milestone 3 (Excel workbook)
 # pyspark is provided by the Databricks Apps runtime; do not pin here.

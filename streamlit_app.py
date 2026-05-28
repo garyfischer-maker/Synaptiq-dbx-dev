@@ -34,6 +34,7 @@ from profiler.catalog import (
 )
 from profiler.manifest import ComparisonParams, SideSpec, new_manifest
 from profiler.metamodel import DatasetProfile, Lineage, ProfilerRun, new_run_id
+from profiler.profile import profile_table
 from profiler.storage import (
     ensure_run_folder,
     list_runs,
@@ -389,7 +390,7 @@ if validate:
 
 
 # ---------------------------------------------------------------------------
-# Run (milestone 1: write manifest + folder, then stop)
+# Run
 
 if run_now and st.session_state.get("validated", False):
     with status:
@@ -405,6 +406,41 @@ if run_now and st.session_state.get("validated", False):
             )
             ensure_run_folder(folder)
 
+            _sample_n = int(sample_n) if sampling_mode == "Sample N rows" else None
+
+            # Phase 1: profile both sides
+            t_profile = time.time()
+            with st.spinner(f"Profiling Side A — {side_a['catalog']}.{side_a['schema']}.{side_a['table']} …"):
+                dataset_a = profile_table(
+                    ref=TableRef(
+                        connection=side_a["connection"].name,
+                        catalog=side_a["catalog"],
+                        schema=side_a["schema"],
+                        table=side_a["table"],
+                    ),
+                    env_label=side_a["env_label"],
+                    folder=folder,
+                    html_filename="profile_a.html",
+                    sample_n=_sample_n,
+                )
+
+            with st.spinner(f"Profiling Side B — {side_b['catalog']}.{side_b['schema']}.{side_b['table']} …"):
+                dataset_b = profile_table(
+                    ref=TableRef(
+                        connection=side_b["connection"].name,
+                        catalog=side_b["catalog"],
+                        schema=side_b["schema"],
+                        table=side_b["table"],
+                    ),
+                    env_label=side_b["env_label"],
+                    folder=folder,
+                    html_filename="profile_b.html",
+                    sample_n=_sample_n,
+                )
+
+            t_profiled = time.time() - t_profile
+
+            # Phase 2: manifest
             manifest = new_manifest(
                 run_id=folder.run_id,
                 run_label=run_label or None,
@@ -413,14 +449,14 @@ if run_now and st.session_state.get("validated", False):
                     connection=side_a["connection"].name,
                     connection_type=side_a["connection"].type,
                     catalog=side_a["catalog"], schema=side_a["schema"], table=side_a["table"],
-                    row_count=side_a.get("_row_count"),
+                    row_count=dataset_a.row_count or side_a.get("_row_count"),
                 ),
                 side_b=SideSpec(
                     env_label=side_b["env_label"],
                     connection=side_b["connection"].name,
                     connection_type=side_b["connection"].type,
                     catalog=side_b["catalog"], schema=side_b["schema"], table=side_b["table"],
-                    row_count=side_b.get("_row_count"),
+                    row_count=dataset_b.row_count or side_b.get("_row_count"),
                 ),
                 comparison=ComparisonParams(
                     depth="with_row_level" if with_row_level else "aggregate_only",
@@ -431,46 +467,30 @@ if run_now and st.session_state.get("validated", False):
                         "Sample N rows": "sample_n",
                         "Stratified by column": "stratified",
                     }[sampling_mode],
-                    sample_n=int(sample_n) if sampling_mode == "Sample N rows" else None,
+                    sample_n=_sample_n,
                     stratify_by=stratify_by or None if sampling_mode == "Stratified by column" else None,
                 ),
                 output_folder=folder.path,
             )
-            manifest.add_timing("setup", time.time() - t0)
-            manifest.warnings.append(
-                "Milestone 1 skeleton: profiling not yet implemented; only "
-                "manifest.json is written."
-            )
+            manifest.add_timing("setup", time.time() - t0 - t_profiled)
+            manifest.add_timing("profiling", t_profiled)
+            manifest.add_artifact("profile_a.html")
+            manifest.add_artifact("profile_b.html")
 
             manifest_path = write_json(folder, "manifest.json", manifest.to_dict())
 
-            # Build a ProfilerRun (column stats are empty until milestone 2
-            # fills them in; structure and lineage are complete now).
+            # Phase 3: metamodel, Mermaid, Delta repo
             profiler_run = ProfilerRun(
                 run_id=new_run_id(),
                 run_label=run_label or None,
                 created_utc=datetime.now(timezone.utc),
-                side_a=DatasetProfile(
-                    env_label=side_a["env_label"],
-                    connection=side_a["connection"].name,
-                    catalog=side_a["catalog"],
-                    schema=side_a["schema"],
-                    table=side_a["table"],
-                    row_count=side_a.get("_row_count") or 0,
-                    column_count=0,
-                    columns=[],
+                side_a=dataset_a,
+                side_b=dataset_b,
+                lineage=Lineage(
+                    manifest="manifest.json",
+                    html_profile_a="profile_a.html",
+                    html_profile_b="profile_b.html",
                 ),
-                side_b=DatasetProfile(
-                    env_label=side_b["env_label"],
-                    connection=side_b["connection"].name,
-                    catalog=side_b["catalog"],
-                    schema=side_b["schema"],
-                    table=side_b["table"],
-                    row_count=side_b.get("_row_count") or 0,
-                    column_count=0,
-                    columns=[],
-                ),
-                lineage=Lineage(manifest="manifest.json"),
             )
 
             write_metamodel(folder, profiler_run)
@@ -487,12 +507,18 @@ if run_now and st.session_state.get("validated", False):
                 except Exception as exc:  # noqa: BLE001
                     st.warning(f"Delta repo ingest skipped: {exc}")
 
-            st.success(f"Run folder created: `{folder.folder_name}`")
-            st.code(manifest_path, language="text")
-            st.info(
-                "4.5.2: metamodel.json, JSON Schema, and 3 Mermaid diagrams written. "
-                "Milestone 2 will add column-level stats; milestone 3 the Excel workbook."
+            st.success(f"Run complete: `{folder.folder_name}`")
+            st.markdown(
+                f"- Side A: **{dataset_a.row_count:,}** rows, "
+                f"**{dataset_a.column_count}** columns, "
+                f"**{sum(len(c.alerts) for c in dataset_a.columns)}** alerts  \n"
+                f"- Side B: **{dataset_b.row_count:,}** rows, "
+                f"**{dataset_b.column_count}** columns, "
+                f"**{sum(len(c.alerts) for c in dataset_b.columns)}** alerts  \n"
+                f"- Profiling time: **{t_profiled:.1f}s**"
             )
+            st.code(manifest_path, language="text")
+
         except Exception:  # noqa: BLE001
             st.error("Run failed — see traceback below.")
             st.code(traceback.format_exc(), language="python")
