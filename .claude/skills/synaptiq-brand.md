@@ -75,7 +75,7 @@ st.markdown("""
     text-align: right;
 }
 .synaptiq-product-name {
-    color: #C8956A;
+    color: #FFFFFF;
     font-size: 0.85rem;
     font-weight: 600;
     letter-spacing: 0.06em;

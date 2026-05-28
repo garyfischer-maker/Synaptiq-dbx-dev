@@ -105,7 +105,7 @@ st.markdown("""
     text-align: right;
 }
 .synaptiq-product-name {
-    color: #C8956A;
+    color: #FFFFFF;
     font-size: 0.85rem;
     font-weight: 600;
     letter-spacing: 0.06em;
@@ -196,6 +196,25 @@ def _env_labels() -> List[str]:
     return load_env_labels()
 
 
+# Cache catalog/schema/table lookups so the warehouse is only hit once per
+# TTL window, not on every Streamlit re-run (which happens on every widget
+# interaction). This prevents the UI from blocking while the warehouse wakes.
+@st.cache_data(ttl=120, show_spinner="Loading schemas…")
+def _cached_schemas(catalog: str) -> List[str]:
+    conn = _connections()[0] if _connections() else None
+    if conn is None:
+        return []
+    return list_schemas(conn, catalog)
+
+
+@st.cache_data(ttl=120, show_spinner="Loading tables…")
+def _cached_tables(catalog: str, schema: str) -> List[str]:
+    conn = _connections()[0] if _connections() else None
+    if conn is None:
+        return []
+    return list_tables(conn, catalog, schema)
+
+
 def _connection_by_name(name: str) -> Optional[Connection]:
     for c in _connections():
         if c.name == name:
@@ -246,18 +265,19 @@ def _table_picker(key: str, title: str = "", default_env_idx: int = 0) -> dict:
 
     # ── Schema ───────────────────────────────────────────────────
     schemas: List[str] = []
-    if conn and catalog:
+    if catalog:
         try:
-            schemas = list_schemas(conn, catalog)
+            schemas = _cached_schemas(catalog)
         except Exception as exc:  # noqa: BLE001
-            st.warning(f"Cannot load schemas for `{catalog}` — {exc}")
+            st.warning(
+                f"Cannot load schemas for `{catalog}` — {exc}\n\n"
+                f"Run in Databricks SQL:  "
+                f"`GRANT USE CATALOG ON CATALOG {catalog} TO <app-sp>;`  \n"
+                f"`GRANT USE SCHEMA, SELECT ON ALL SCHEMAS IN CATALOG {catalog} TO <app-sp>;`"
+            )
 
     if catalog and not schemas:
-        st.caption(
-            f"No schemas visible in `{catalog}`. "
-            "Grant the app service principal: "
-            f"`GRANT USE SCHEMA, SELECT ON SCHEMA {catalog}.<schema> TO <sp>;`"
-        )
+        st.caption(f"No schemas visible in `{catalog}` — check service principal grants.")
 
     schema = st.selectbox(
         "Schema", options=schemas, key=f"{key}_schema",
@@ -267,14 +287,14 @@ def _table_picker(key: str, title: str = "", default_env_idx: int = 0) -> dict:
 
     # ── Table ────────────────────────────────────────────────────
     tables: List[str] = []
-    if conn and catalog and schema:
+    if catalog and schema:
         try:
-            tables = list_tables(conn, catalog, schema)
+            tables = _cached_tables(catalog, schema)
         except Exception as exc:  # noqa: BLE001
             st.warning(f"Cannot load tables for `{catalog}.{schema}` — {exc}")
 
     if schema and not tables:
-        st.caption(f"No tables found in `{catalog}.{schema}`.")
+        st.caption(f"No tables in `{catalog}.{schema}`.")
 
     table = st.selectbox(
         "Table", options=tables, key=f"{key}_table",
@@ -534,7 +554,7 @@ with tab_compare:
     with col_a:
         try:
             idx_a = _cmp_labels.index("PROD") if "PROD" in _cmp_labels else 0
-            _default_a = _table_picker("cmp_a", title="Side A — baseline / PROD", default_env_idx=idx_a)
+            _default_a = _table_picker("cmp_a", title="Side A — baseline", default_env_idx=idx_a)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Side A error: {exc}")
             st.code(traceback.format_exc(), language="python")

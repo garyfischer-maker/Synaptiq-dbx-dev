@@ -129,9 +129,14 @@ def _sql_connect():
     host = os.environ["DATABRICKS_HOST"].replace("https://", "").rstrip("/")
     warehouse_id = os.environ["DATABRICKS_WAREHOUSE_ID"]
     http_path = f"/sql/1.0/warehouses/{warehouse_id}"
-    # In the Databricks App runtime, access_token is provided via env too;
-    # the connector auto-discovers it when run inside an app.
-    return sql.connect(server_hostname=host, http_path=http_path)
+    # _timeout: fail fast if the warehouse doesn't respond within 30 s.
+    # Without this, an auto-suspended warehouse blocks indefinitely and
+    # prevents the Streamlit script from rendering beyond the blocking call.
+    return sql.connect(
+        server_hostname=host,
+        http_path=http_path,
+        _timeout=30,
+    )
 
 
 def _sql_query(q: str) -> List[tuple]:
