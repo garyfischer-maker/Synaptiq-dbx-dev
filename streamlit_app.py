@@ -105,7 +105,7 @@ st.markdown("""
     text-align: right;
 }
 .synaptiq-product-name {
-    color: #C8956A;
+    color: #FFFFFF;
     font-size: 0.85rem;
     font-weight: 600;
     letter-spacing: 0.06em;
@@ -196,6 +196,25 @@ def _env_labels() -> List[str]:
     return load_env_labels()
 
 
+# Cache catalog/schema/table lookups so the warehouse is only hit once per
+# TTL window, not on every Streamlit re-run (which happens on every widget
+# interaction). This prevents the UI from blocking while the warehouse wakes.
+@st.cache_data(ttl=120, show_spinner="Loading schemas…")
+def _cached_schemas(catalog: str) -> List[str]:
+    conn = _connections()[0] if _connections() else None
+    if conn is None:
+        return []
+    return list_schemas(conn, catalog)
+
+
+@st.cache_data(ttl=120, show_spinner="Loading tables…")
+def _cached_tables(catalog: str, schema: str) -> List[str]:
+    conn = _connections()[0] if _connections() else None
+    if conn is None:
+        return []
+    return list_tables(conn, catalog, schema)
+
+
 def _connection_by_name(name: str) -> Optional[Connection]:
     for c in _connections():
         if c.name == name:
@@ -208,12 +227,15 @@ def _connection_by_name(name: str) -> Optional[Connection]:
 
 
 def _table_picker(key: str, title: str = "", default_env_idx: int = 0) -> dict:
-    """Cascading catalog → schema → table picker. Returns a side dict."""
+    """Cascading catalog → schema → table picker. Returns a side dict.
+
+    Every SQL call is wrapped in try/except so a warehouse error in one
+    picker never prevents the other side from rendering.
+    """
     if title:
         st.markdown(f"**{title}**")
 
     conn_names = [c.name for c in _connections()]
-    # Auto-select when only one connection exists — no need to show the dropdown.
     if len(conn_names) == 1:
         conn_name = conn_names[0]
         conn = _connection_by_name(conn_name)
@@ -229,17 +251,56 @@ def _table_picker(key: str, title: str = "", default_env_idx: int = 0) -> dict:
         help="Label used in report titles and run folder names.",
     )
 
-    catalogs = list_catalogs(conn) if conn else []
-    catalog = st.selectbox("Catalog", options=catalogs, key=f"{key}_catalog",
-                           index=0 if catalogs else None)
+    # ── Catalog ──────────────────────────────────────────────────
+    try:
+        catalogs = list_catalogs(conn) if conn else []
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Cannot load catalogs: {exc}")
+        catalogs = []
 
-    schemas = list_schemas(conn, catalog) if (conn and catalog) else []
-    schema = st.selectbox("Schema", options=schemas, key=f"{key}_schema",
-                          index=0 if schemas else None)
+    catalog = st.selectbox(
+        "Catalog", options=catalogs, key=f"{key}_catalog",
+        index=0 if catalogs else None,
+    )
 
-    tables = list_tables(conn, catalog, schema) if (conn and catalog and schema) else []
-    table = st.selectbox("Table", options=tables, key=f"{key}_table",
-                         index=0 if tables else None)
+    # ── Schema ───────────────────────────────────────────────────
+    schemas: List[str] = []
+    if catalog:
+        try:
+            schemas = _cached_schemas(catalog)
+        except Exception as exc:  # noqa: BLE001
+            st.warning(
+                f"Cannot load schemas for `{catalog}` — {exc}\n\n"
+                f"Run in Databricks SQL:  "
+                f"`GRANT USE CATALOG ON CATALOG {catalog} TO <app-sp>;`  \n"
+                f"`GRANT USE SCHEMA, SELECT ON ALL SCHEMAS IN CATALOG {catalog} TO <app-sp>;`"
+            )
+
+    if catalog and not schemas:
+        st.caption(f"No schemas visible in `{catalog}` — check service principal grants.")
+
+    schema = st.selectbox(
+        "Schema", options=schemas, key=f"{key}_schema",
+        index=0 if schemas else None,
+        placeholder="— pick a schema —",
+    )
+
+    # ── Table ────────────────────────────────────────────────────
+    tables: List[str] = []
+    if catalog and schema:
+        try:
+            tables = _cached_tables(catalog, schema)
+        except Exception as exc:  # noqa: BLE001
+            st.warning(f"Cannot load tables for `{catalog}.{schema}` — {exc}")
+
+    if schema and not tables:
+        st.caption(f"No tables in `{catalog}.{schema}`.")
+
+    table = st.selectbox(
+        "Table", options=tables, key=f"{key}_table",
+        index=0 if tables else None,
+        placeholder="— pick a table —",
+    )
 
     return {
         "env_label": env_label,
@@ -485,13 +546,29 @@ with tab_compare:
     # ---- Table pickers ----
     st.subheader("1. Pick the two tables")
     col_a, col_b = st.columns(2, gap="large")
+
+    _cmp_labels = _env_labels()
+    _default_a: dict = {}
+    _default_b: dict = {}
+
     with col_a:
-        labels = _env_labels()
-        idx_a = labels.index("PROD") if "PROD" in labels else 0
-        side_a = _table_picker("cmp_a", title="Side A (baseline / PROD)", default_env_idx=idx_a)
+        try:
+            idx_a = _cmp_labels.index("PROD") if "PROD" in _cmp_labels else 0
+            _default_a = _table_picker("cmp_a", title="Side A — baseline", default_env_idx=idx_a)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Side A error: {exc}")
+            st.code(traceback.format_exc(), language="python")
+
     with col_b:
-        idx_b = labels.index("TEST") if "TEST" in labels else min(1, len(labels) - 1)
-        side_b = _table_picker("cmp_b", title="Side B (candidate / TEST)", default_env_idx=idx_b)
+        try:
+            idx_b = _cmp_labels.index("TEST") if "TEST" in _cmp_labels else min(1, len(_cmp_labels) - 1)
+            _default_b = _table_picker("cmp_b", title="Side B — candidate / TEST", default_env_idx=idx_b)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Side B error: {exc}")
+            st.code(traceback.format_exc(), language="python")
+
+    side_a = _default_a
+    side_b = _default_b
 
     st.divider()
 
