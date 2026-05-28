@@ -182,33 +182,31 @@ def _dbx_list_volumes(catalog: str, schema: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # Mock backend — enough variety to exercise the cascading UI.
 #
-# Split by connection type so a `native` auto-discover does NOT include
-# shared catalogs (mirrors real Databricks behavior — system.information_schema
-# only returns local catalogs the SP can USE).
+# POC topology: single `dev` catalog. Environments are simulated by schema
+# name prefix (test_main_*, prod_main_*, qa_main_*, stage_main_*, dev_*).
+# _volumes keys are internal; they are not returned as table names.
 
-_MOCK_NATIVE = {
-    "prod_main": {
-        "sales": ["orders", "order_items", "customers"],
-        "profiler": {"_volumes": ["ab_runs"]},
-    },
+_MOCK = {
+    "dev": {
+        "test_main_profiler":  {"_volumes": ["ab_runs"]},
+        "test_main_sales":     ["orders", "order_items", "customers", "products"],
+        "test_main_finance":   ["invoices", "payments", "ledger"],
+        "test_main_inventory": ["items", "warehouses", "stock_levels"],
+        "prod_main_sales":     ["orders", "order_items", "customers", "products"],
+        "prod_main_finance":   ["invoices", "payments", "ledger"],
+        "prod_main_inventory": ["items", "warehouses", "stock_levels"],
+        "qa_main_sales":       ["orders", "customers"],
+        "qa_main_finance":     ["invoices", "payments"],
+        "stage_main_sales":    ["orders", "customers", "products"],
+        "dev_sandbox":         ["experiment_a", "experiment_b", "scratch"],
+    }
 }
-_MOCK_SHARED = {
-    "test_sh": {
-        "sales": ["orders", "order_items", "customers"],
-    },
-    "dev_sh": {
-        "sandbox": ["foo", "bar"],
-    },
-}
-_MOCK = {**_MOCK_NATIVE, **_MOCK_SHARED}  # combined for downstream lookups
 
 
 def _mock_list_catalogs(conn: Connection) -> List[str]:
     if conn.catalogs:
         return sorted(conn.catalogs)
-    if conn.type == "native":
-        return sorted(_MOCK_NATIVE.keys())
-    return sorted(_MOCK_SHARED.keys())
+    return sorted(_MOCK.keys())
 
 
 def _mock_list_schemas(catalog: str) -> List[str]:

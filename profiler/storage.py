@@ -17,7 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from typing import TYPE_CHECKING
+
 from .catalog import TableRef, VolumeRef
+
+if TYPE_CHECKING:
+    from .metamodel import ProfilerRun
 
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -87,6 +92,30 @@ def list_runs(output: VolumeRef, limit: int = 20) -> list[str]:
         reverse=True,
     )
     return [e.name for e in entries[:limit]]
+
+
+def write_metamodel(folder: RunFolder, run: "ProfilerRun") -> str:
+    """Write metamodel.json to the run folder. Returns the file path."""
+    return write_text(folder, "metamodel.json", run.to_json())
+
+
+def write_json_schema(folder: RunFolder) -> str:
+    """Write dq-metamodel-v<MAJOR>.schema.json to the run folder. Returns the path."""
+    from .metamodel import METAMODEL_VERSION, schema_for_current_version
+    major = METAMODEL_VERSION.split(".")[0]
+    filename = f"dq-metamodel-v{major}.schema.json"
+    return write_json(folder, filename, schema_for_current_version())
+
+
+def write_mermaid_diagrams(folder: RunFolder, run: "ProfilerRun") -> tuple[str, str, str]:
+    """Write schema_a.mmd, schema_b.mmd, drift.mmd. Returns (path_a, path_b, path_drift)."""
+    from .mermaid import render_all
+    a_mmd, b_mmd, drift_mmd = render_all(run)
+    return (
+        write_text(folder, "schema_a.mmd", a_mmd),
+        write_text(folder, "schema_b.mmd", b_mmd),
+        write_text(folder, "drift.mmd", drift_mmd),
+    )
 
 
 def _mock_rewrite(path: str) -> str:

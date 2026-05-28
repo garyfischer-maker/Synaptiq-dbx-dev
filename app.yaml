@@ -11,8 +11,8 @@ resources:
   # Must exist in the Profiler Host workspace. See README §3 for create SQL.
   - name: output-volume
     volume:
-      catalog: "test_main"                 # Profiler Host catalog (TEST)
-      schema:  "profiler"
+      catalog: "dev"                       # POC: single catalog
+      schema:  "test_main_profiler"        # env prefix convention
       volume:  "ab_runs"
       permission: "WRITE"
 
@@ -20,7 +20,7 @@ resources:
   # dropdowns). A small/serverless warehouse is plenty.
   - name: sql-warehouse
     sql_warehouse:
-      id: "CHANGEME_warehouse_id"          # TODO
+      id: "2ad65b4df5cd3a9e"
       permission: "CAN_USE"
 
 env:

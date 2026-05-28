@@ -1,19 +1,21 @@
-"""Streamlit UI — Table A/B Profiler (milestone 1 skeleton).
+"""Streamlit UI — Synaptiq Data Quality Platform.
 
 The UI is complete: symmetric Side A / Side B inputs, env label + connection
 dropdowns, cascading catalog/schema/table pickers, comparison-depth radio
 (aggregate-only vs. with row-level diff), sampling controls, output volume
 picker, run label, runs-history sidebar.
 
-The Validate action is real (hits information_schema and checks reachability
-+ row counts). The Run action builds a RunFolder + manifest.json and then
-stops — profiling is milestone 2+.
+Milestone 4.5.2: Run action also writes metamodel.json, JSON Schema,
+three Mermaid diagrams, and persists rows to the Delta governance repo.
+Profiling (column stats) is milestone 2+.
 """
 
 from __future__ import annotations
 
+import os
 import time
 import traceback
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import streamlit as st
@@ -31,11 +33,15 @@ from profiler.catalog import (
     load_env_labels,
 )
 from profiler.manifest import ComparisonParams, SideSpec, new_manifest
+from profiler.metamodel import DatasetProfile, Lineage, ProfilerRun, new_run_id
 from profiler.storage import (
     ensure_run_folder,
     list_runs,
     make_run_folder,
     write_json,
+    write_json_schema,
+    write_metamodel,
+    write_mermaid_diagrams,
 )
 
 
@@ -43,7 +49,7 @@ from profiler.storage import (
 # Page config + config loading
 
 st.set_page_config(
-    page_title="Table A/B Profiler",
+    page_title="Synaptiq Data Quality Platform",
     page_icon="⚖️",
     layout="wide",
 )
@@ -118,8 +124,8 @@ def _side_picker(side_key: str, default_env_idx: int) -> dict:
 # Sidebar — run history
 
 def _sidebar():
-    st.sidebar.title("Table A/B Profiler")
-    st.sidebar.caption("Milestone 1 — skeleton")
+    st.sidebar.title("Synaptiq DQ Platform")
+    st.sidebar.caption("Milestone 4.5.2 — metamodel + Mermaid + Delta repo")
     st.sidebar.divider()
 
     with st.sidebar.expander("Recent runs", expanded=False):
@@ -141,10 +147,11 @@ def _sidebar():
 
 _sidebar()
 
-st.title("⚖️ Table A/B Profiler")
+st.title("⚖️ Synaptiq Data Quality Platform")
 st.caption(
-    "Profile two Unity Catalog tables side-by-side and surface the "
-    "differences. Outputs land in a Unity Catalog volume as HTML + Excel."
+    "Profile and compare Unity Catalog tables. Outputs land in a Unity Catalog "
+    "volume as metamodel JSON, Mermaid diagrams, HTML profiles, and Excel — "
+    "with each run persisted to the Delta governance repository."
 )
 
 st.divider()
@@ -436,11 +443,55 @@ if run_now and st.session_state.get("validated", False):
             )
 
             manifest_path = write_json(folder, "manifest.json", manifest.to_dict())
+
+            # Build a ProfilerRun (column stats are empty until milestone 2
+            # fills them in; structure and lineage are complete now).
+            profiler_run = ProfilerRun(
+                run_id=new_run_id(),
+                run_label=run_label or None,
+                created_utc=datetime.now(timezone.utc),
+                side_a=DatasetProfile(
+                    env_label=side_a["env_label"],
+                    connection=side_a["connection"].name,
+                    catalog=side_a["catalog"],
+                    schema=side_a["schema"],
+                    table=side_a["table"],
+                    row_count=side_a.get("_row_count") or 0,
+                    column_count=0,
+                    columns=[],
+                ),
+                side_b=DatasetProfile(
+                    env_label=side_b["env_label"],
+                    connection=side_b["connection"].name,
+                    catalog=side_b["catalog"],
+                    schema=side_b["schema"],
+                    table=side_b["table"],
+                    row_count=side_b.get("_row_count") or 0,
+                    column_count=0,
+                    columns=[],
+                ),
+                lineage=Lineage(manifest="manifest.json"),
+            )
+
+            write_metamodel(folder, profiler_run)
+            write_json_schema(folder)
+            write_mermaid_diagrams(folder, profiler_run)
+
+            # Delta governance repo — requires SparkSession (Databricks only).
+            if os.environ.get("PROFILER_RUNTIME", "mock").lower() == "databricks":
+                try:
+                    from profiler import delta_repo
+                    delta_repo.ensure_tables(out_catalog, out_schema)
+                    delta_repo.ingest(profiler_run, out_catalog, out_schema)
+                    st.info("Run persisted to Delta governance tables.")
+                except Exception as exc:  # noqa: BLE001
+                    st.warning(f"Delta repo ingest skipped: {exc}")
+
             st.success(f"Run folder created: `{folder.folder_name}`")
             st.code(manifest_path, language="text")
             st.info(
-                "Milestone 1 stops here. Milestone 2 will fill in the HTML "
-                "profiles; milestone 3 the Excel workbook and stat/schema diff."
+                "4.5.2: metamodel.json, JSON Schema, and 3 Mermaid diagrams written. "
+                "Milestone 2 will add column-level stats; milestone 3 the Excel workbook."
             )
         except Exception:  # noqa: BLE001
             st.error("Run failed — see traceback below.")
