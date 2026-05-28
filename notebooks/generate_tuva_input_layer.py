@@ -289,9 +289,23 @@ def write_delta(pdf: pd.DataFrame, catalog: str, schema: str, table: str) -> Non
 
     Overwrites the table and schema each call (idempotent for reruns).
     Prints row count after write.
+
+    NullType guard: Spark infers all-None columns as NullType, which Parquet
+    cannot physically store — causing a schema mismatch in Catalog Explorer.
+    Any NullType column is cast to StringType (nullable) before writing so
+    the column exists in both the Delta metadata and the Parquet files.
     """
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import NullType, StringType
+
     full_name = f"`{catalog}`.`{schema}`.`{table}`"
     sdf = spark.createDataFrame(pdf)
+
+    # Cast any all-None (NullType) columns to StringType so Parquet can store them.
+    null_cols = [f.name for f in sdf.schema.fields if isinstance(f.dataType, NullType)]
+    for col_name in null_cols:
+        sdf = sdf.withColumn(col_name, F.lit(None).cast(StringType()))
+
     (sdf.write
         .format("delta")
         .mode("overwrite")
