@@ -240,11 +240,20 @@ def _mock_list_volumes(catalog: str, schema: str) -> List[str]:
 # Helpers used by the UI
 
 def describe_table(ref: TableRef) -> Optional[int]:
-    """Return row count (best-effort, exact). Used by the Validate step.
+    """Verify a table is accessible and return its row count if available.
 
-    Returns None in mock mode.
+    Uses the Unity Catalog REST API (no warehouse needed) to confirm the
+    table exists and the SP can read it. Row count is returned from UC
+    table statistics when available, otherwise None.
     """
     if _runtime() == "mock":
         return None
-    rows = _sql_query(f"SELECT COUNT(*) FROM {ref.fqn}")
-    return int(rows[0][0]) if rows else None
+    w = _workspace_client()
+    info = w.tables.get(full_name=f"{ref.catalog}.{ref.schema}.{ref.table}")
+    # UC may cache row count in table properties; use it if present.
+    try:
+        if info.properties and "numRows" in info.properties:
+            return int(info.properties["numRows"])
+    except Exception:
+        pass
+    return None
