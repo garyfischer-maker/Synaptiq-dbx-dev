@@ -117,71 +117,67 @@ def list_volumes(catalog: str, schema: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Databricks SQL backend
+# Databricks Unity Catalog REST API backend (metadata lookups)
 #
-# Uses DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID + the app's auto-injected
-# credentials. databricks-sql-connector picks up the service-principal token
-# from the app runtime; no explicit auth needed.
+# Uses the Databricks SDK (WorkspaceClient) for catalog/schema/table/volume
+# discovery. The SDK calls the Unity Catalog REST API directly — no SQL
+# warehouse needed, no startup wait, no blocking.
+#
+# The SQL warehouse (_sql_connect / _sql_query) is kept ONLY for actual
+# data queries during profile runs (profile.py). Never use it for UI dropdowns.
 
+@lru_cache(maxsize=1)
+def _workspace_client():
+    from databricks.sdk import WorkspaceClient
+    return WorkspaceClient()
+
+
+def _dbx_list_catalogs(conn: Connection) -> List[str]:
+    if conn.catalogs:
+        return sorted(conn.catalogs)
+    w = _workspace_client()
+    return sorted(c.name for c in w.catalogs.list() if c.name)
+
+
+def _dbx_list_schemas(catalog: str) -> List[str]:
+    w = _workspace_client()
+    return sorted(
+        s.name for s in w.schemas.list(catalog_name=catalog)
+        if s.name and s.name != "information_schema"
+    )
+
+
+def _dbx_list_tables(catalog: str, schema: str) -> List[str]:
+    w = _workspace_client()
+    return sorted(
+        t.name for t in w.tables.list(catalog_name=catalog, schema_name=schema)
+        if t.name
+    )
+
+
+def _dbx_list_volumes(catalog: str, schema: str) -> List[str]:
+    w = _workspace_client()
+    return sorted(
+        v.name for v in w.volumes.list(catalog_name=catalog, schema_name=schema)
+        if v.name
+    )
+
+
+# SQL connector — used ONLY by profile.py for actual data reads.
+# Never call this from the UI dropdown code paths.
 def _sql_connect():
-    from databricks import sql  # imported lazily so `mock` runs without the lib
+    from databricks import sql
 
     host = os.environ["DATABRICKS_HOST"].replace("https://", "").rstrip("/")
     warehouse_id = os.environ["DATABRICKS_WAREHOUSE_ID"]
     http_path = f"/sql/1.0/warehouses/{warehouse_id}"
-    # _timeout: fail fast if the warehouse doesn't respond within 30 s.
-    # Without this, an auto-suspended warehouse blocks indefinitely and
-    # prevents the Streamlit script from rendering beyond the blocking call.
-    return sql.connect(
-        server_hostname=host,
-        http_path=http_path,
-        _timeout=30,
-    )
+    return sql.connect(server_hostname=host, http_path=http_path)
 
 
 def _sql_query(q: str) -> List[tuple]:
     with _sql_connect() as cx, cx.cursor() as cur:
         cur.execute(q)
         return cur.fetchall()
-
-
-@lru_cache(maxsize=1)
-def _dbx_list_catalogs_all() -> List[str]:
-    rows = _sql_query(
-        "SELECT catalog_name FROM system.information_schema.catalogs "
-        "ORDER BY catalog_name"
-    )
-    return [r[0] for r in rows]
-
-
-def _dbx_list_catalogs(conn: Connection) -> List[str]:
-    if conn.catalogs:
-        return sorted(conn.catalogs)
-    return _dbx_list_catalogs_all()
-
-
-def _dbx_list_schemas(catalog: str) -> List[str]:
-    rows = _sql_query(
-        f"SELECT schema_name FROM `{catalog}`.information_schema.schemata "
-        "WHERE schema_name <> 'information_schema' ORDER BY schema_name"
-    )
-    return [r[0] for r in rows]
-
-
-def _dbx_list_tables(catalog: str, schema: str) -> List[str]:
-    rows = _sql_query(
-        f"SELECT table_name FROM `{catalog}`.information_schema.tables "
-        f"WHERE table_schema = '{schema}' ORDER BY table_name"
-    )
-    return [r[0] for r in rows]
-
-
-def _dbx_list_volumes(catalog: str, schema: str) -> List[str]:
-    rows = _sql_query(
-        f"SELECT volume_name FROM `{catalog}`.information_schema.volumes "
-        f"WHERE volume_schema = '{schema}' ORDER BY volume_name"
-    )
-    return [r[0] for r in rows]
 
 
 # ---------------------------------------------------------------------------

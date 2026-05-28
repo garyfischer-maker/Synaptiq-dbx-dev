@@ -199,7 +199,7 @@ def _env_labels() -> List[str]:
 # Cache catalog/schema/table lookups so the warehouse is only hit once per
 # TTL window, not on every Streamlit re-run (which happens on every widget
 # interaction). This prevents the UI from blocking while the warehouse wakes.
-@st.cache_data(ttl=120, show_spinner="Loading schemas…")
+@st.cache_data(ttl=120)
 def _cached_schemas(catalog: str) -> List[str]:
     conn = _connections()[0] if _connections() else None
     if conn is None:
@@ -207,7 +207,7 @@ def _cached_schemas(catalog: str) -> List[str]:
     return list_schemas(conn, catalog)
 
 
-@st.cache_data(ttl=120, show_spinner="Loading tables…")
+@st.cache_data(ttl=120)
 def _cached_tables(catalog: str, schema: str) -> List[str]:
     conn = _connections()[0] if _connections() else None
     if conn is None:
