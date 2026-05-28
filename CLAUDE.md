@@ -1,10 +1,12 @@
-# Synaptiq Databricks Table A/B Profiler
+# Synaptiq Data Quality Platform
 
-A Databricks App for profiling two Unity Catalog tables and producing a
-side-by-side comparison (A/B). Produces deep ydata-profiling HTML reports per
-side, a comparison HTML, an Excel summary, drift metrics (PSI, KS,
-Chi-square, JS divergence), and a UML-inspired Data Quality Metamodel as
-machine-readable JSON plus a Delta governance repository.
+A Databricks App for ongoing data quality monitoring of Unity Catalog tables.
+Profiles individual tables, compares any two versions side-by-side (A/B),
+detects statistical drift, and persists quality snapshots to a Delta governance
+repository so quality trends are queryable over time. Outputs include per-side
+HTML profiles, a comparison HTML, an Excel summary, drift metrics (PSI, KS,
+Chi-square, JS divergence), a UML-inspired DQ Metamodel as machine-readable
+JSON, and three Mermaid schema/drift diagrams per run.
 
 This file is the project context for any AI coding assistant (Claude Code
 in particular) and any new human contributor. Read it before doing anything
@@ -14,9 +16,12 @@ non-trivial in the repo.
 
 ## Quick context
 
-- **Purpose:** A/B compare two Unity Catalog tables (any catalogs, any
-  environments — TEST vs PROD, v1 vs v2, blue vs green, etc.) and surface
-  the differences for data engineers shipping changes between environments.
+- **Purpose:** Monitor, profile, and compare Unity Catalog tables across any
+  catalogs or environments (TEST vs PROD, v1 vs v2, blue vs green). Each run
+  produces a quality snapshot persisted to a Delta governance repo, making
+  quality trends queryable over time. A/B comparison surfaces schema and
+  statistical drift for data engineers shipping table changes between
+  environments.
 - **Frontend:** Streamlit, deployed as a Databricks App.
 - **Profiling engine:** ydata-profiling with the Spark backend
   (planned, milestone 2).
