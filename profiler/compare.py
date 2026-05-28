@@ -1,16 +1,18 @@
-"""Schema diff and aggregate-stat diff (milestone 3).
+"""Schema diff and drift-metric comparison (milestones 3 + 4).
 
 Public API:
     compare_tables(side_a, side_b) -> list[ColumnComparison]
-        Full comparison pipeline. Returns one ColumnComparison per unique
-        column name across both sides, with schema_change and verdict set.
-        PSI / KS / Chi-square / JS divergence are populated in milestone 4.
+        Full pipeline: schema_diff → stat_diff. One ColumnComparison per
+        unique column name; schema_change, PSI/KS/Chi-square/JS, and verdict
+        all set.
 
     schema_diff(side_a, side_b) -> list[ColumnComparison]
         Detects added / removed / type_changed / nullability_changed / unchanged.
 
     stat_diff(side_a, side_b, comparisons) -> list[ColumnComparison]
-        Milestone 3: returns comparisons unchanged (drift metrics added in M4).
+        Computes PSI/KS/Chi-square/JS divergence for unchanged column pairs
+        using the pre-computed histograms stored in the metamodel profiles.
+        Sets verdict via verdict_from_psi(); adds Drifted stereotype for PSI ≥ 0.2.
 
 Row-level diff is milestone 6.
 """
@@ -87,12 +89,53 @@ def stat_diff(
     side_b: DatasetProfile,
     comparisons: list[ColumnComparison],
 ) -> list[ColumnComparison]:
-    """Milestone 3: returns comparisons unchanged.
+    """Compute PSI/KS/Chi-square/JS divergence for each unchanged column pair.
 
-    Milestone 4 enriches each ColumnComparison with psi, ks_stat,
-    ks_pvalue, chi_square, js_divergence, and updates verdict accordingly.
+    Columns with schema changes are passed through unchanged.
+    Verdict is derived from PSI via verdict_from_psi().
+    Drifted stereotype is added for PSI >= PSI_MODERATE_MAX (0.2).
     """
-    return comparisons
+    from .drift import compute_column_drift
+    from .metamodel import PSI_MODERATE_MAX
+
+    a_map = {c.name: c for c in side_a.columns}
+    b_map = {c.name: c for c in side_b.columns}
+
+    updated: list[ColumnComparison] = []
+    for cmp in comparisons:
+        if cmp.schema_change != "unchanged":
+            updated.append(cmp)
+            continue
+
+        col_a = a_map.get(cmp.column_name)
+        col_b = b_map.get(cmp.column_name)
+
+        if col_a is None or col_b is None:
+            updated.append(cmp)
+            continue
+
+        drift = compute_column_drift(col_a, col_b)
+
+        stereotypes = [s for s in cmp.stereotypes]
+        if drift.psi is not None and drift.psi >= PSI_MODERATE_MAX:
+            if "Drifted" not in stereotypes:
+                stereotypes.append("Drifted")
+
+        updated.append(
+            ColumnComparison(
+                column_name=cmp.column_name,
+                schema_change=cmp.schema_change,
+                psi=drift.psi,
+                ks_stat=drift.ks_stat,
+                ks_pvalue=drift.ks_pvalue,
+                chi_square=drift.chi_square,
+                js_divergence=drift.js_divergence,
+                verdict=verdict_from_psi(drift.psi),
+                stereotypes=stereotypes,
+            )
+        )
+
+    return updated
 
 
 # ---------------------------------------------------------------------------

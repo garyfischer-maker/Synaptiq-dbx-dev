@@ -275,31 +275,40 @@ def _sheet_alerts(wb: openpyxl.Workbook, run: ProfilerRun) -> None:
 def _sheet_drift_scores(wb: openpyxl.Workbook, run: ProfilerRun) -> None:
     ws = wb.create_sheet("DriftScores")
 
-    title = ws.cell(row=1, column=1, value="Drift Scores — Milestone 4")
-    title.font = _TITLE_FONT
-    ws.cell(row=3, column=1,
-            value="PSI, KS statistic, Chi-square, and JS divergence will be "
-                  "added in milestone 4 (drift module).")
-    ws.column_dimensions["A"].width = 70
+    headers = [
+        "Column", "Type", "Schema change",
+        "PSI", "Verdict",
+        "KS stat", "KS p-value",
+        "Chi-square", "JS divergence",
+    ]
+    _write_header_row(ws, headers)
 
-    if run.comparisons:
-        headers = ["Column", "PSI", "KS stat", "KS p-value", "Chi-square", "JS divergence", "Verdict"]
-        _write_header_row(ws, headers, start_row=5)
-        for cmp in run.comparisons:
-            ws.append([
-                cmp.column_name,
-                cmp.psi if cmp.psi is not None else "—",
-                cmp.ks_stat if cmp.ks_stat is not None else "—",
-                cmp.ks_pvalue if cmp.ks_pvalue is not None else "—",
-                cmp.chi_square if cmp.chi_square is not None else "—",
-                cmp.js_divergence if cmp.js_divergence is not None else "—",
-                cmp.verdict,
-            ])
-            fill = _VERDICT_FILL.get(cmp.verdict)
-            if fill:
-                ws.cell(row=ws.max_row, column=7).fill = fill
+    a_map = {c.name: c for c in run.side_a.columns}
 
-        _autofit(ws, headers)
+    for cmp in run.comparisons:
+        col_a = a_map.get(cmp.column_name)
+        col_type = col_a.logical_type if col_a else "—"
+
+        row = [
+            cmp.column_name,
+            col_type,
+            cmp.schema_change,
+            _fmt_num(cmp.psi, dp=4) if cmp.psi is not None else "—",
+            cmp.verdict,
+            _fmt_num(cmp.ks_stat, dp=4) if cmp.ks_stat is not None else "—",
+            _fmt_num(cmp.ks_pvalue, dp=4) if cmp.ks_pvalue is not None else "—",
+            _fmt_num(cmp.chi_square, dp=2) if cmp.chi_square is not None else "—",
+            _fmt_num(cmp.js_divergence, dp=4) if cmp.js_divergence is not None else "—",
+        ]
+        ws.append(row)
+
+        fill = _VERDICT_FILL.get(cmp.verdict)
+        if fill:
+            # Colour the entire row for drifted/schema-changed columns
+            for ci in range(1, len(headers) + 1):
+                ws.cell(row=ws.max_row, column=ci).fill = fill
+
+    _autofit(ws, headers)
 
 
 # ---------------------------------------------------------------------------

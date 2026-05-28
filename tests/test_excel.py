@@ -297,22 +297,26 @@ class TestDriftScoresSheet:
         path = write_workbook(folder, run)
         return openpyxl.load_workbook(path)["DriftScores"]
 
-    def test_contains_milestone_4_message(self, tmp_path):
-        ws = self._ws(tmp_path)
-        all_text = " ".join(
+    def _all_text(self, ws) -> str:
+        return " ".join(
             str(ws.cell(r, c).value)
             for r in range(1, ws.max_row + 1)
             for c in range(1, ws.max_column + 1)
             if ws.cell(r, c).value
         )
-        assert "milestone 4" in all_text.lower() or "Milestone 4" in all_text
 
-    def test_column_headers_present_when_comparisons_exist(self, tmp_path):
+    def test_psi_header_present(self, tmp_path):
+        assert "PSI" in self._all_text(self._ws(tmp_path))
+
+    def test_verdict_header_present(self, tmp_path):
+        assert "Verdict" in self._all_text(self._ws(tmp_path))
+
+    def test_column_names_present(self, tmp_path):
         ws = self._ws(tmp_path)
-        all_text = " ".join(
-            str(ws.cell(r, c).value)
-            for r in range(1, ws.max_row + 1)
-            for c in range(1, ws.max_column + 1)
-            if ws.cell(r, c).value
-        )
-        assert "PSI" in all_text
+        assert "claim_id" in self._all_text(ws)
+
+    def test_row_count_matches_comparisons(self, tmp_path):
+        run, folder = _run(tmp_path)
+        path = write_workbook(folder, run)
+        ws = openpyxl.load_workbook(path)["DriftScores"]
+        assert ws.max_row == len(run.comparisons) + 1  # header + data rows
