@@ -596,24 +596,29 @@ def _sidebar():
                 else:
                     st.success("Thanks! Suggestion saved.")
 
-        with st.expander("View past suggestions", expanded=False):
-            history = _load_suggestions()
-            if not history:
-                st.caption("_No suggestions yet._")
-            else:
-                for row in history:
-                    who = row[0] or "Anonymous"
-                    text = row[1] or ""
-                    when = str(row[2])[:16] if row[2] else ""
-                    st.markdown(
-                        f"<div style='background:rgba(255,255,255,0.1);"
-                        f"border-radius:4px;padding:6px 8px;margin-bottom:6px;"
-                        f"font-size:0.8rem;color:white;'>"
-                        f"<b>{who}</b>&nbsp;"
-                        f"<span style='opacity:0.6;font-size:0.72rem;'>{when}</span>"
-                        f"<br>{text}</div>",
-                        unsafe_allow_html=True,
-                    )
+        st.markdown(
+            "<div style='color:rgba(255,255,255,0.5);font-size:0.75rem;"
+            "text-transform:uppercase;letter-spacing:0.08em;"
+            "margin:10px 0 4px 0;'>Recent suggestions</div>",
+            unsafe_allow_html=True,
+        )
+        history = _load_suggestions()
+        if not history:
+            st.caption("_No suggestions yet._")
+        else:
+            for row in history:
+                who = row[0] or "Anonymous"
+                text = row[1] or ""
+                when = str(row[2])[:16] if row[2] else ""
+                st.markdown(
+                    f"<div style='background:rgba(255,255,255,0.1);"
+                    f"border-radius:4px;padding:6px 8px;margin-bottom:6px;"
+                    f"font-size:0.8rem;color:white;'>"
+                    f"<b>{who}</b>&nbsp;"
+                    f"<span style='opacity:0.6;font-size:0.72rem;'>{when}</span>"
+                    f"<br>{text}</div>",
+                    unsafe_allow_html=True,
+                )
 
 
 _sidebar()
