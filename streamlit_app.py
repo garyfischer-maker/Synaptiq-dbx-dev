@@ -564,28 +564,44 @@ if _runtime_mode == "databricks":
                         try:
                             from profiler.catalog import _workspace_client
                             _w = _workspace_client()
-                            _wh = _w.warehouses.get(id=_warehouse_id)
-                            _state = str(_wh.state).upper() if _wh.state else "UNKNOWN"
+                            # Check current state (requires CAN USE or CAN MANAGE).
+                            try:
+                                _wh = _w.warehouses.get(id=_warehouse_id)
+                                _state = str(_wh.state).upper() if _wh.state else "UNKNOWN"
+                            except Exception:
+                                _state = "UNKNOWN"
+
                             if "RUNNING" in _state:
-                                st.success(
-                                    f"✅ Warehouse already running — "
-                                    f"took {_time.time()-_t0:.1f}s."
-                                )
-                            else:
-                                st.caption(f"Warehouse state: {_state} — starting …")
-                                _w.warehouses.start(id=_warehouse_id)
-                                _w.warehouses.wait_get_warehouse_running(
-                                    id=_warehouse_id,
-                                    timeout=_td(minutes=10),
-                                )
-                                _elapsed = _time.time() - _t0
-                                st.success(
-                                    f"✅ Warehouse RUNNING — took {_elapsed:.1f}s. "
-                                    "Run your comparison now."
-                                )
+                                st.success(f"✅ Warehouse already RUNNING — ready immediately.")
                                 st.session_state["compute_warmed"] = True
+                            else:
+                                st.caption(f"Warehouse state: **{_state}**. Attempting to start …")
+                                try:
+                                    _w.warehouses.start(id=_warehouse_id)
+                                    _w.warehouses.wait_get_warehouse_running(
+                                        id=_warehouse_id,
+                                        timeout=_td(minutes=10),
+                                    )
+                                    _elapsed = _time.time() - _t0
+                                    st.success(f"✅ Warehouse RUNNING — took {_elapsed:.1f}s. Run your comparison now.")
+                                    st.session_state["compute_warmed"] = True
+                                except Exception as _start_exc:
+                                    st.warning(
+                                        f"Could not start warehouse automatically: {_start_exc}\n\n"
+                                        f"Ask your admin to grant **Can manage** on warehouse "
+                                        f"`{_warehouse_id}` to SP `{_warehouse_id}`.\n\n"
+                                        f"Alternatively, manually start the warehouse in **SQL → "
+                                        f"Warehouses** before running a profile."
+                                    )
                         except Exception as _exc:  # noqa: BLE001
-                            st.error(f"❌ Warehouse start failed: {_exc}")
+                            st.error(
+                                f"Cannot reach warehouse `{_warehouse_id}`: {_exc}\n\n"
+                                f"Your admin needs to run:\n"
+                                f"```sql\n"
+                                f"GRANT CAN USE ON SQL WAREHOUSE `{_warehouse_id}`\n"
+                                f"  TO `39ee93a7-c623-4614-90a8-c3798bb5b329`;\n"
+                                f"```"
+                            )
             elif "compute_warmed" not in st.session_state:
                 st.caption(
                     "💡 Click **Initialize Compute** to start the SQL warehouse "
