@@ -154,6 +154,16 @@ section[data-testid="stSidebar"] * {
 section[data-testid="stSidebar"] .streamlit-expanderHeader {
     color: rgba(255,255,255,0.85) !important;
 }
+/* Input fields inside sidebar need dark text so it's readable */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] textarea {
+    color: #2D3748 !important;
+    background: #FFFFFF !important;
+}
+section[data-testid="stSidebar"] input::placeholder,
+section[data-testid="stSidebar"] textarea::placeholder {
+    color: #9AA5B4 !important;
+}
 
 /* ── Buttons ──────────────────────────────────────────────────── */
 div[data-testid="stButton"] > button[kind="primary"] {
