@@ -69,6 +69,8 @@ def write_workbook(
     filename: str = "ab_summary.xlsx",
 ) -> str:
     """Write the Excel summary workbook. Returns the file path."""
+    from .storage import write_bytes
+
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # remove default empty sheet
 
@@ -82,8 +84,7 @@ def write_workbook(
     wb.save(buf)
     buf.seek(0)
 
-    path = _write_bytes(folder, filename, buf.read())
-    return path
+    return write_bytes(folder, filename, buf.read())
 
 
 # ---------------------------------------------------------------------------
@@ -379,12 +380,3 @@ def _top_value(col: ColumnProfile) -> str:
     return "—"
 
 
-def _write_bytes(folder: RunFolder, filename: str, data: bytes) -> str:
-    """Write binary data to the run folder. Returns the file path."""
-    import os
-    from .storage import _mock_rewrite
-    path = _mock_rewrite(f"{folder.path}/{filename}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as fh:
-        fh.write(data)
-    return path

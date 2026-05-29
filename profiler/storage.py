@@ -1,23 +1,26 @@
 """Output-volume I/O: run folder naming, manifest writes, file listing.
 
-The output volume is wired as a Databricks App resource in app.yaml; it's
-available at /Volumes/<catalog>/<schema>/<volume> inside the app container.
+Storage backend selection:
+    databricks — Databricks Files API (SDK).  Writes directly to UC Volumes
+                 without requiring a FUSE mount.  Handles create, upload, list,
+                 and download operations.
+    mock       — Local filesystem under ./_mock_runs/ for offline development.
 
 Run folder convention:
-    <volume>/runs/<YYYY-MM-DD_HHMM>__<envA>-vs-<envB>__<table>[__<label>]/
+    /Volumes/<catalog>/<schema>/<volume>/runs/<YYYY-MM-DD_HHMM>__<envA>-vs-<envB>__<table>[__<label>]/
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
-
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from .catalog import TableRef, VolumeRef
 
@@ -32,12 +35,27 @@ def _slug(s: str) -> str:
     return _SAFE.sub("-", s.strip()).strip("-").lower() or "x"
 
 
+def _runtime() -> str:
+    return os.environ.get("PROFILER_RUNTIME", "mock").lower()
+
+
+@lru_cache(maxsize=1)
+def _wc():
+    """Cached WorkspaceClient — shared across all storage calls."""
+    from databricks.sdk import WorkspaceClient
+    return WorkspaceClient()
+
+
+# ---------------------------------------------------------------------------
+# RunFolder
+
+
 @dataclass(frozen=True)
 class RunFolder:
     volume: VolumeRef
     run_id: str       # YYYY-MM-DD_HHMM
     folder_name: str  # full run folder basename
-    path: str         # absolute /Volumes path
+    path: str         # /Volumes/... path (or _mock_runs/... in mock mode)
 
 
 def make_run_folder(
@@ -63,74 +81,106 @@ def make_run_folder(
     return RunFolder(volume=output, run_id=run_id, folder_name=folder_name, path=path)
 
 
+# ---------------------------------------------------------------------------
+# Write operations
+
+
 def ensure_run_folder(folder: RunFolder) -> None:
-    """Create the run folder. In mock mode, creates under ./_mock_runs."""
-    target = _mock_rewrite(folder.path)
+    """Create the run folder.
 
-    # Pre-flight: verify the volume root is accessible before trying to create
-    # subdirectories. The FUSE mount is only established at app startup — if the
-    # volume was created after the last deploy, the mount won't exist yet.
-    vol_root = _mock_rewrite(folder.volume.path)
-    if not os.environ.get("PROFILER_RUNTIME", "mock").lower() == "mock":
-        vol_path = Path(vol_root)
-        if not vol_path.exists():
-            vol = folder.volume
-            raise FileNotFoundError(
-                f"UC Volume not mounted at {vol_root}.\n\n"
-                f"This usually means the app was deployed before the volume existed. "
-                f"Fix:\n"
-                f"  1. Confirm the volume exists:\n"
-                f"     CREATE VOLUME IF NOT EXISTS {vol.catalog}.{vol.schema}.{vol.volume};\n"
-                f"  2. Confirm SP grants:\n"
-                f"     GRANT WRITE VOLUME ON VOLUME {vol.catalog}.{vol.schema}.{vol.volume} "
-                f"TO `<app-sp>`;\n"
-                f"  3. REDEPLOY the app — the FUSE mount is only set up at app startup."
-            )
-
-    try:
-        Path(target).mkdir(parents=True, exist_ok=True)
-    except (PermissionError, OSError) as exc:
-        vol = folder.volume
-        raise PermissionError(
-            f"Cannot create run folder at {target}.\n"
-            f"Volume root: {vol_root}\n"
-            f"Check SP has WRITE VOLUME on {vol.catalog}.{vol.schema}.{vol.volume} "
-            f"and redeploy the app."
-        ) from exc
+    Databricks mode: creates a directory via the Files API (no FUSE needed).
+    Mock mode: creates under ./_mock_runs/ on the local filesystem.
+    """
+    if _runtime() == "databricks":
+        try:
+            _wc().files.create_directory(folder.path)
+        except Exception:
+            pass  # already exists or will be created on first upload
+        return
+    Path(_local(folder.path)).mkdir(parents=True, exist_ok=True)
 
 
 def write_text(folder: RunFolder, filename: str, content: str) -> str:
-    path = _mock_rewrite(f"{folder.path}/{filename}")
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(content, encoding="utf-8")
-    return path
+    """Write a UTF-8 text file. Returns the canonical /Volumes/... path."""
+    path = f"{folder.path}/{filename}"
+    if _runtime() == "databricks":
+        _wc().files.upload(
+            file_path=path,
+            contents=io.BytesIO(content.encode("utf-8")),
+            overwrite=True,
+        )
+        return path
+    local = _local(path)
+    Path(local).parent.mkdir(parents=True, exist_ok=True)
+    Path(local).write_text(content, encoding="utf-8")
+    return local
+
+
+def write_bytes(folder: RunFolder, filename: str, data: bytes) -> str:
+    """Write raw bytes. Returns the canonical /Volumes/... path."""
+    path = f"{folder.path}/{filename}"
+    if _runtime() == "databricks":
+        _wc().files.upload(
+            file_path=path,
+            contents=io.BytesIO(data),
+            overwrite=True,
+        )
+        return path
+    local = _local(path)
+    Path(local).parent.mkdir(parents=True, exist_ok=True)
+    Path(local).write_bytes(data)
+    return local
 
 
 def write_json(folder: RunFolder, filename: str, obj: dict) -> str:
     return write_text(folder, filename, json.dumps(obj, indent=2, default=str))
 
 
+def read_text(path: str) -> str:
+    """Read a text file from a /Volumes/... path or local equivalent."""
+    if _runtime() == "databricks":
+        response = _wc().files.download(file_path=path)
+        return response.contents.read().decode("utf-8")
+    return Path(_local(path)).read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Run listing
+
+
 def list_runs(output: VolumeRef, limit: int = 20) -> list[str]:
-    """Return most-recent run folder names (basenames only)."""
-    root = _mock_rewrite(f"{output.path}/runs")
-    p = Path(root)
-    if not p.exists():
+    """Return the most-recent run folder names (basenames only)."""
+    runs_path = f"{output.path}/runs"
+    if _runtime() == "databricks":
+        try:
+            entries = list(_wc().files.list_directory_contents(runs_path))
+            dirs = sorted(
+                [e.name for e in entries if e.is_directory],
+                reverse=True,
+            )
+            return dirs[:limit]
+        except Exception:
+            return []
+    local = Path(_local(runs_path))
+    if not local.exists():
         return []
-    entries = sorted(
-        (e for e in p.iterdir() if e.is_dir()),
+    dirs = sorted(
+        (e for e in local.iterdir() if e.is_dir()),
         key=lambda e: e.name,
         reverse=True,
     )
-    return [e.name for e in entries[:limit]]
+    return [e.name for e in dirs[:limit]]
+
+
+# ---------------------------------------------------------------------------
+# Higher-level writers
 
 
 def write_metamodel(folder: RunFolder, run: "ProfilerRun") -> str:
-    """Write metamodel.json to the run folder. Returns the file path."""
     return write_text(folder, "metamodel.json", run.to_json())
 
 
 def write_json_schema(folder: RunFolder) -> str:
-    """Write dq-metamodel-v<MAJOR>.schema.json to the run folder. Returns the path."""
     from .metamodel import METAMODEL_VERSION, schema_for_current_version
     major = METAMODEL_VERSION.split(".")[0]
     filename = f"dq-metamodel-v{major}.schema.json"
@@ -138,7 +188,6 @@ def write_json_schema(folder: RunFolder) -> str:
 
 
 def write_mermaid_diagrams(folder: RunFolder, run: "ProfilerRun") -> tuple[str, str, str]:
-    """Write schema_a.mmd, schema_b.mmd, drift.mmd. Returns (path_a, path_b, path_drift)."""
     from .mermaid import render_all
     a_mmd, b_mmd, drift_mmd = render_all(run)
     return (
@@ -148,11 +197,17 @@ def write_mermaid_diagrams(folder: RunFolder, run: "ProfilerRun") -> tuple[str, 
     )
 
 
-def _mock_rewrite(path: str) -> str:
-    """When running outside Databricks, redirect /Volumes writes to ./_mock_runs.
+# ---------------------------------------------------------------------------
+# Internal helpers
 
-    This lets the skeleton be developed locally without a real mount.
-    """
-    if os.environ.get("PROFILER_RUNTIME", "mock").lower() == "databricks":
-        return path
+
+def _local(path: str) -> str:
+    """Rewrite /Volumes/... to ./_mock_runs/... for local development."""
     return path.replace("/Volumes/", "./_mock_runs/")
+
+
+# Keep _mock_rewrite as an alias so existing callers outside this module work.
+def _mock_rewrite(path: str) -> str:
+    if _runtime() == "databricks":
+        return path
+    return _local(path)

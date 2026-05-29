@@ -41,6 +41,7 @@ from profiler.storage import (
     ensure_run_folder,
     list_runs,
     make_run_folder,
+    read_text,
     write_json,
     write_json_schema,
     write_metamodel,
@@ -438,12 +439,9 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
     mmd_tabs = st.tabs(mmd_tab_labels)
     for tab, fname in zip(mmd_tabs, mmd_files):
         with tab:
-            path = os.path.join(folder.path, fname)
-            # In mock mode the path is local; in Databricks it's /Volumes/...
-            actual = path.replace("/Volumes/", "./_mock_runs/") if not os.path.exists(path) else path
-            if os.path.exists(actual):
-                mmd_src = open(actual).read()
-                # Render via Mermaid.js CDN
+            path = f"{folder.path}/{fname}"
+            try:
+                mmd_src = read_text(path)
                 components.html(
                     f"""
                     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
@@ -452,8 +450,8 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
                     """,
                     height=500, scrolling=True,
                 )
-            else:
-                st.info(f"`{fname}` not found at `{folder.path}`")
+            except Exception:
+                st.info(f"`{fname}` not yet available.")
 
     # HTML profile reports (iframe)
     st.markdown("#### Profile reports")
@@ -464,13 +462,12 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
     html_tabs = st.tabs([label for label, _ in html_files])
     for tab, (label, fname) in zip(html_tabs, html_files):
         with tab:
-            path = os.path.join(folder.path, fname)
-            actual = path.replace("/Volumes/", "./_mock_runs/") if not os.path.exists(path) else path
-            if os.path.exists(actual):
-                html_content = open(actual, encoding="utf-8").read()
+            path = f"{folder.path}/{fname}"
+            try:
+                html_content = read_text(path)
                 components.html(html_content, height=800, scrolling=True)
-            else:
-                st.info(f"`{fname}` not found — profile may still be generating.")
+            except Exception:
+                st.info(f"`{fname}` not yet available — profile may still be generating.")
 
     # Artifact paths
     with st.expander("Output file locations", expanded=False):
