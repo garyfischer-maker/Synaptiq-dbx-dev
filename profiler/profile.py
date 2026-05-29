@@ -81,10 +81,27 @@ def _databricks_profile(
 
     limit = sample_n or FETCH_LIMIT
 
+    # Pre-flight: verify warehouse is RUNNING before opening SQL connection.
+    # A non-RUNNING warehouse causes sql.connect() to hang indefinitely.
+    try:
+        from .catalog import _workspace_client
+        import os as _os
+        _wid = _os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+        if _wid:
+            _w = _workspace_client()
+            _wh = _w.warehouses.get(id=_wid)
+            _state = str(_wh.state).upper() if _wh.state else "UNKNOWN"
+            if "RUNNING" not in _state:
+                raise RuntimeError(
+                    f"SQL warehouse is {_state} — not RUNNING. "
+                    f"Click '⚡ Initialize Compute' in the app to start it first."
+                )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass  # Permission to check state may be absent; proceed anyway
+
     with _sql_connect() as cx, cx.cursor() as cur:
-        # Single query: fetch the sample and derive row count from it.
-        # Avoids a separate SELECT COUNT(*) which adds another warehouse
-        # round-trip and doubles cold-start wait time.
         cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
         col_names = [d[0] for d in cur.description]
         rows = cur.fetchall()

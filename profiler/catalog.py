@@ -171,7 +171,13 @@ def _sql_connect():
     host = os.environ["DATABRICKS_HOST"].replace("https://", "").rstrip("/")
     warehouse_id = os.environ["DATABRICKS_WAREHOUSE_ID"]
     http_path = f"/sql/1.0/warehouses/{warehouse_id}"
-    return sql.connect(server_hostname=host, http_path=http_path)
+
+    # Use PAT token if set, otherwise rely on app runtime auto-auth.
+    token = os.environ.get("DATABRICKS_TOKEN") or os.environ.get("DATABRICKS_ACCESS_TOKEN")
+    kwargs: dict = dict(server_hostname=host, http_path=http_path)
+    if token:
+        kwargs["access_token"] = token
+    return sql.connect(**kwargs)
 
 
 def _sql_query(q: str) -> List[tuple]:
