@@ -282,11 +282,12 @@ def flatten(run: "ProfilerRun") -> dict[str, list[dict[str, Any]]]:
 def ensure_tables(catalog: str, schema: str) -> None:
     """Create the five governance tables if they don't exist.
 
-    Requires an active SparkSession (Databricks runtime).
+    Uses the SQL warehouse (no Spark session required).
     """
-    spark = _get_spark()
-    for stmt in _ddl(catalog, schema):
-        spark.sql(stmt)
+    from .catalog import _sql_connect
+    with _sql_connect() as cx, cx.cursor() as cur:
+        for stmt in _ddl(catalog, schema):
+            cur.execute(stmt)
 
 
 def ingest(
@@ -294,83 +295,45 @@ def ingest(
     catalog: str,
     schema: str,
 ) -> None:
-    """MERGE one ProfilerRun into the five governance tables.
+    """Insert one ProfilerRun into the five governance tables.
 
-    Idempotent: re-ingesting the same run_id overwrites rather than duplicates.
-    Requires an active SparkSession (Databricks runtime).
+    Idempotent: deletes any existing rows for this run_id before inserting.
+    Uses the SQL warehouse (no Spark session required).
     """
-    spark = _get_spark()
-    rows = flatten(run)
+    from .catalog import _sql_connect
+
+    rows_by_table = flatten(run)
     run_id = str(run.run_id)
     q = f"`{catalog}`.`{schema}`"
 
-    _merge_run(spark, q, rows["profiler_runs"], run_id)
-    _merge_side(spark, q, rows["dataset_profiles"], run_id, "dataset_profiles", "side")
-    _merge_col(spark, q, rows["column_profiles"], run_id, "column_profiles", "side, column_name")
-    _merge_col(spark, q, rows["column_alerts"], run_id, "column_alerts", "side, column_name, rule")
-    _merge_comparisons(spark, q, rows["column_comparisons"], run_id)
+    with _sql_connect() as cx, cx.cursor() as cur:
+        for table_name, table_rows in rows_by_table.items():
+            if not table_rows:
+                continue
+            full_name = f"{q}.`{table_name}`"
+            # Idempotent: remove any prior rows for this run_id.
+            cur.execute(f"DELETE FROM {full_name} WHERE run_id = '{run_id}'")
+            # Insert all rows.
+            cols = list(table_rows[0].keys())
+            col_list = ", ".join(f"`{c}`" for c in cols)
+            for row in table_rows:
+                values = ", ".join(_sql_literal(row[c]) for c in cols)
+                cur.execute(f"INSERT INTO {full_name} ({col_list}) VALUES ({values})")
 
 
-# ---------------------------------------------------------------------------
-# Private MERGE helpers
-
-
-def _get_spark():
-    from pyspark.sql import SparkSession
-    return SparkSession.getActiveSession()
-
-
-def _merge_run(spark, q: str, rows: list[dict], run_id: str) -> None:
-    if not rows:
-        return
-    df = spark.createDataFrame(rows)
-    df.createOrReplaceTempView("_stage_profiler_runs")
-    spark.sql(f"""
-        MERGE INTO {q}.profiler_runs AS t
-        USING _stage_profiler_runs AS s
-        ON t.run_id = s.run_id
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
-    """)
-
-
-def _merge_side(spark, q: str, rows: list[dict], run_id: str, table: str, extra_keys: str) -> None:
-    if not rows:
-        return
-    df = spark.createDataFrame(rows)
-    df.createOrReplaceTempView(f"_stage_{table}")
-    spark.sql(f"""
-        MERGE INTO {q}.{table} AS t
-        USING _stage_{table} AS s
-        ON t.run_id = s.run_id AND t.{extra_keys} = s.{extra_keys}
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
-    """)
-
-
-def _merge_col(spark, q: str, rows: list[dict], run_id: str, table: str, extra_keys: str) -> None:
-    if not rows:
-        return
-    df = spark.createDataFrame(rows)
-    df.createOrReplaceTempView(f"_stage_{table}")
-    spark.sql(f"""
-        MERGE INTO {q}.{table} AS t
-        USING _stage_{table} AS s
-        ON t.run_id = s.run_id AND t.{extra_keys} = s.{extra_keys}
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
-    """)
-
-
-def _merge_comparisons(spark, q: str, rows: list[dict], run_id: str) -> None:
-    if not rows:
-        return
-    df = spark.createDataFrame(rows)
-    df.createOrReplaceTempView("_stage_column_comparisons")
-    spark.sql(f"""
-        MERGE INTO {q}.column_comparisons AS t
-        USING _stage_column_comparisons AS s
-        ON t.run_id = s.run_id AND t.column_name = s.column_name
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
-    """)
+def _sql_literal(val: Any) -> str:
+    """Convert a Python value to a safe SQL literal string."""
+    from datetime import date, datetime
+    if val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, datetime):
+        return f"TIMESTAMP '{val.strftime('%Y-%m-%d %H:%M:%S')}'"
+    if isinstance(val, date):
+        return f"DATE '{val.strftime('%Y-%m-%d')}'"
+    # String — escape single quotes.
+    escaped = str(val).replace("'", "''")
+    return f"'{escaped}'"

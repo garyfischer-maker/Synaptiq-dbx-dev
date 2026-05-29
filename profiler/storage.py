@@ -153,9 +153,13 @@ def list_runs(output: VolumeRef, limit: int = 20) -> list[str]:
     runs_path = f"{output.path}/runs"
     if _runtime() == "databricks":
         try:
-            entries = list(_wc().files.list_directory_contents(runs_path))
+            # Trailing slash required by the Files API for directory listing.
+            path = runs_path if runs_path.endswith("/") else runs_path + "/"
+            entries = list(_wc().files.list_directory_contents(path))
             dirs = sorted(
-                [e.name for e in entries if e.is_directory],
+                [e.name.rstrip("/") for e in entries
+                 if getattr(e, "is_directory", False) or
+                    (e.name and not e.name.endswith("."))],
                 reverse=True,
             )
             return dirs[:limit]
