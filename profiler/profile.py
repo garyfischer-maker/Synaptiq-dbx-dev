@@ -101,11 +101,42 @@ def _databricks_profile(
     except Exception:
         pass  # Permission to check state may be absent; proceed anyway
 
-    with _sql_connect() as cx, cx.cursor() as cur:
+    # Wrap the SQL fetch in a thread with a hard timeout so we get a clear
+    # error instead of hanging forever when the warehouse or network is slow.
+    import concurrent.futures as _cf
+    import time as _time
+
+    _CONNECT_TIMEOUT = 90    # seconds to establish connection
+    _QUERY_TIMEOUT   = 300   # seconds to execute + fetch results
+
+    def _fetch() -> tuple:
+        t0 = _time.time()
+        cx = _sql_connect()
+        connect_ms = int((_time.time() - t0) * 1000)
+        cur = cx.cursor()
         cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
         col_names = [d[0] for d in cur.description]
         rows = cur.fetchall()
-        pdf = pd.DataFrame(rows, columns=col_names)
+        cur.close()
+        cx.close()
+        return rows, col_names, connect_ms
+
+    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+        _future = _pool.submit(_fetch)
+        try:
+            rows, col_names, connect_ms = _future.result(
+                timeout=_CONNECT_TIMEOUT + _QUERY_TIMEOUT
+            )
+        except _cf.TimeoutError:
+            raise TimeoutError(
+                f"SQL warehouse did not respond within "
+                f"{_CONNECT_TIMEOUT + _QUERY_TIMEOUT}s. "
+                f"The warehouse may still be starting up, or a firewall is "
+                f"blocking the connection. Warehouse: "
+                f"{os.environ.get('DATABRICKS_WAREHOUSE_ID','?')}"
+            )
+
+    pdf = pd.DataFrame(rows, columns=col_names)
 
     sampled_rows = len(pdf)
     # Row count = sample length (exact when table <= FETCH_LIMIT rows,
