@@ -166,7 +166,7 @@ st.markdown("""
     <div class="synaptiq-tagline">The Humankind of AI</div>
   </div>
   <div class="synaptiq-product">
-    <div class="synaptiq-product-name">YOUR PRODUCT NAME HERE</div>
+    <div class="synaptiq-product-name">Data Profiling Tool</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
