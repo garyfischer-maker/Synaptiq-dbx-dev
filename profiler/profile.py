@@ -119,27 +119,82 @@ def _databricks_profile(
 
 
 def _generate_html(pdf: pd.DataFrame, title: str, wide: bool) -> str:
-    try:
-        from ydata_profiling import ProfileReport
-        report = ProfileReport(pdf, title=title, minimal=True, lazy=False)
-        return report.to_html()
-    except Exception as exc:  # noqa: BLE001
-        # Fall back to a simple summary so the run can complete even if
-        # ydata-profiling fails (import error, timeout, memory, etc.).
-        rows, cols = len(pdf), len(pdf.columns)
-        col_list = "".join(
-            f"<tr><td>{c}</td><td>{str(pdf[c].dtype)}</td>"
-            f"<td>{int(pdf[c].isna().sum())}</td></tr>"
-            for c in pdf.columns
+    """Generate a fast HTML profile report directly from pandas stats.
+
+    Intentionally avoids ydata-profiling — that library's import and
+    computation overhead makes it unsuitable for interactive web apps.
+    """
+    rows, cols_n = len(pdf), len(pdf.columns)
+
+    col_rows = []
+    for col in pdf.columns:
+        s = pdf[col]
+        dtype = str(s.dtype)
+        nulls = int(s.isna().sum())
+        null_pct = nulls / rows * 100 if rows else 0
+        distinct = int(s.nunique(dropna=True))
+
+        null_style = "background:#ffe0e0" if null_pct > 50 else (
+                     "background:#fff8e0" if null_pct > 10 else "")
+
+        if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+            clean = s.dropna()
+            stats = (f"min={clean.min():.4g} / mean={clean.mean():.4g} / "
+                     f"max={clean.max():.4g} / std={clean.std():.4g}"
+                     if len(clean) else "all null")
+        else:
+            vc = s.dropna().astype(str).value_counts().head(5)
+            stats = " | ".join(f"{v}: {c:,}" for v, c in vc.items()) if len(vc) else "—"
+
+        col_rows.append(
+            f"<tr>"
+            f"<td><b>{col}</b></td>"
+            f"<td>{dtype}</td>"
+            f"<td style='{null_style}'>{null_pct:.1f}% ({nulls:,})</td>"
+            f"<td>{distinct:,}</td>"
+            f"<td style='font-size:0.85em;color:#555'>{stats}</td>"
+            f"</tr>"
         )
-        return (
-            f"<html><body>"
-            f"<h2>{title}</h2>"
-            f"<p>ydata-profiling error: {exc}</p>"
-            f"<p>{rows:,} rows × {cols} columns</p>"
-            f"<table border='1'><tr><th>Column</th><th>Type</th><th>Nulls</th></tr>"
-            f"{col_list}</table></body></html>"
-        )
+
+    table_rows = "\n".join(col_rows)
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         margin: 24px; color: #2D3748; background: #f8f9fb; }}
+  h1   {{ color: #8BA4BD; font-size: 1.4rem; margin-bottom: 4px; }}
+  .meta {{ color: #666; font-size: 0.9rem; margin-bottom: 20px; }}
+  table {{ border-collapse: collapse; width: 100%; background: white;
+           box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-radius: 6px;
+           overflow: hidden; }}
+  th   {{ background: #8BA4BD; color: white; padding: 10px 14px;
+          text-align: left; font-size: 0.85rem; letter-spacing: 0.04em; }}
+  td   {{ padding: 8px 14px; border-bottom: 1px solid #eef3f8;
+          font-size: 0.9rem; vertical-align: top; }}
+  tr:last-child td {{ border-bottom: none; }}
+  tr:hover td {{ background: #f5f8fc; }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+<div class="meta">{rows:,} rows &nbsp;·&nbsp; {cols_n} columns</div>
+<table>
+<thead>
+  <tr>
+    <th>Column</th><th>Type</th><th>Null %</th>
+    <th>Distinct</th><th>Stats / Top values</th>
+  </tr>
+</thead>
+<tbody>
+{table_rows}
+</tbody>
+</table>
+</body>
+</html>"""
 
 
 def _profile_columns(
