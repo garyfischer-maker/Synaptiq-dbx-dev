@@ -119,11 +119,27 @@ def _databricks_profile(
 
 
 def _generate_html(pdf: pd.DataFrame, title: str, wide: bool) -> str:
-    from ydata_profiling import ProfileReport
-    # Always use minimal=True for web app context — full mode (correlations,
-    # interactions, missing diagrams) is too slow for interactive use.
-    report = ProfileReport(pdf, title=title, minimal=True, lazy=False)
-    return report.to_html()
+    try:
+        from ydata_profiling import ProfileReport
+        report = ProfileReport(pdf, title=title, minimal=True, lazy=False)
+        return report.to_html()
+    except Exception as exc:  # noqa: BLE001
+        # Fall back to a simple summary so the run can complete even if
+        # ydata-profiling fails (import error, timeout, memory, etc.).
+        rows, cols = len(pdf), len(pdf.columns)
+        col_list = "".join(
+            f"<tr><td>{c}</td><td>{str(pdf[c].dtype)}</td>"
+            f"<td>{int(pdf[c].isna().sum())}</td></tr>"
+            for c in pdf.columns
+        )
+        return (
+            f"<html><body>"
+            f"<h2>{title}</h2>"
+            f"<p>ydata-profiling error: {exc}</p>"
+            f"<p>{rows:,} rows × {cols} columns</p>"
+            f"<table border='1'><tr><th>Column</th><th>Type</th><th>Nulls</th></tr>"
+            f"{col_list}</table></body></html>"
+        )
 
 
 def _profile_columns(
