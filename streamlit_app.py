@@ -534,6 +534,47 @@ st.caption(
     "Compare two tables to detect schema drift and statistical distribution shift."
 )
 
+# ---------------------------------------------------------------------------
+# Compute warm-up banner
+
+_runtime_mode = os.environ.get("PROFILER_RUNTIME", "mock").lower()
+if _runtime_mode == "databricks":
+    with st.container():
+        col_warm, col_status = st.columns([1, 4])
+        with col_warm:
+            warm_clicked = st.button(
+                "⚡ Initialize Compute",
+                type="secondary",
+                help=(
+                    "Wakes up the SQL warehouse before you run a profile. "
+                    "Click this while configuring your tables — by the time "
+                    "you hit Run, the warehouse will be ready."
+                ),
+            )
+        with col_status:
+            if warm_clicked:
+                with st.spinner("Waking up SQL warehouse …"):
+                    import time as _time
+                    _t0 = _time.time()
+                    try:
+                        from profiler.catalog import _sql_connect
+                        with _sql_connect() as _cx, _cx.cursor() as _cur:
+                            _cur.execute("SELECT 1")
+                            _cur.fetchone()
+                        _elapsed = _time.time() - _t0
+                        st.success(
+                            f"✅ Warehouse ready — took {_elapsed:.1f}s. "
+                            "Run your comparison now for fastest results."
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        st.error(f"❌ Warehouse warm-up failed: {_exc}")
+            elif "compute_warmed" not in st.session_state:
+                st.caption(
+                    "💡 Click **Initialize Compute** to pre-warm the SQL warehouse "
+                    "before running a profile — avoids the 2–5 min cold-start wait."
+                )
+
+st.divider()
 tab_compare, tab_profile = st.tabs(["⚖️  Compare two tables", "🔍  Profile table(s)"])
 
 
