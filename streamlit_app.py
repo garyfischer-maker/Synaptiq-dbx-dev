@@ -54,8 +54,8 @@ from profiler.storage import (
 # Page config
 
 st.set_page_config(
-    page_title="Synaptiq Data Quality Platform",
-    page_icon="⚖️",
+    page_title="Synaptiq Data Profiling Tool",
+    page_icon="🔬",
     layout="wide",
 )
 
@@ -481,6 +481,63 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 # ---------------------------------------------------------------------------
 # Sidebar
 
+# ---------------------------------------------------------------------------
+# Suggestions helpers
+
+
+def _submit_suggestion(name: str, suggestion: str) -> str:
+    """Insert a suggestion row. Returns '' on success, error string on failure."""
+    import uuid
+    from datetime import datetime, timezone
+    from profiler.catalog import _sql_connect, _runtime
+    if _runtime() != "databricks":
+        return "Suggestions are only stored in Databricks mode."
+    sid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    name_e = (name or "Anonymous").replace("'", "''")
+    sugg_e = suggestion.replace("'", "''")
+    try:
+        with _sql_connect() as cx, cx.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS `dev`.`test_main_profiler`.`user_suggestions` (
+                    suggestion_id STRING    NOT NULL,
+                    submitted_by  STRING,
+                    suggestion    STRING    NOT NULL,
+                    submitted_at  TIMESTAMP NOT NULL
+                ) USING DELTA
+                TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')
+            """)
+            cur.execute(
+                f"INSERT INTO `dev`.`test_main_profiler`.`user_suggestions` "
+                f"(suggestion_id, submitted_by, suggestion, submitted_at) "
+                f"VALUES ('{sid}', '{name_e}', '{sugg_e}', TIMESTAMP '{now}')"
+            )
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+
+
+def _load_suggestions() -> list:
+    """Return up to 20 most-recent suggestions."""
+    from profiler.catalog import _sql_connect, _runtime
+    if _runtime() != "databricks":
+        return []
+    try:
+        with _sql_connect() as cx, cx.cursor() as cur:
+            cur.execute("""
+                SELECT submitted_by, suggestion, submitted_at
+                FROM `dev`.`test_main_profiler`.`user_suggestions`
+                ORDER BY submitted_at DESC LIMIT 20
+            """)
+            return cur.fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+
+
 def _sidebar():
     runtime = os.environ.get("PROFILER_RUNTIME", "NOT SET")
     colour = "#2ecc71" if runtime == "databricks" else "#e74c3c"
@@ -495,10 +552,11 @@ def _sidebar():
   <div style='font-size:1.1rem; font-weight:700; letter-spacing:0.05em;
               color:#FFFFFF;'>Synaptiq</div>
   <div style='font-size:0.62rem; letter-spacing:0.14em; text-transform:uppercase;
-              color:rgba(255,255,255,0.65); margin-top:2px;'>Data Quality Platform</div>
+              color:rgba(255,255,255,0.65); margin-top:2px;'>Data Profiling Tool</div>
 </div>
 """, unsafe_allow_html=True)
     st.sidebar.divider()
+
     with st.sidebar.expander("Recent runs", expanded=False):
         vol = st.session_state.get("output_volume")
         if vol:
@@ -509,6 +567,53 @@ def _sidebar():
                 st.caption(name)
         else:
             st.caption("_Select an output volume to see run history._")
+
+    st.sidebar.divider()
+
+    # ── Suggestions ──────────────────────────────────────────────────────────
+    with st.sidebar.expander("💡 Suggestions", expanded=False):
+        st.markdown(
+            "<div style='color:white;font-size:0.85rem;margin-bottom:10px;'>"
+            "Have an idea or improvement? Let us know!</div>",
+            unsafe_allow_html=True,
+        )
+        with st.form("suggestion_form", clear_on_submit=True):
+            s_name = st.text_input("Your name", placeholder="e.g. Gary Fischer")
+            s_text = st.text_area(
+                "Suggestion",
+                placeholder="Describe the feature or improvement you'd like to see…",
+                height=120,
+            )
+            s_submitted = st.form_submit_button("Submit", type="primary")
+
+        if s_submitted:
+            if not s_text.strip():
+                st.warning("Please enter a suggestion.")
+            else:
+                err = _submit_suggestion(s_name.strip(), s_text.strip())
+                if err:
+                    st.error(f"Could not save: {err}")
+                else:
+                    st.success("Thanks! Suggestion saved.")
+
+        with st.expander("View past suggestions", expanded=False):
+            history = _load_suggestions()
+            if not history:
+                st.caption("_No suggestions yet._")
+            else:
+                for row in history:
+                    who = row[0] or "Anonymous"
+                    text = row[1] or ""
+                    when = str(row[2])[:16] if row[2] else ""
+                    st.markdown(
+                        f"<div style='background:rgba(255,255,255,0.1);"
+                        f"border-radius:4px;padding:6px 8px;margin-bottom:6px;"
+                        f"font-size:0.8rem;color:white;'>"
+                        f"<b>{who}</b>&nbsp;"
+                        f"<span style='opacity:0.6;font-size:0.72rem;'>{when}</span>"
+                        f"<br>{text}</div>",
+                        unsafe_allow_html=True,
+                    )
 
 
 _sidebar()
@@ -524,14 +629,14 @@ st.markdown("""
     <div class="synaptiq-tagline">The Humankind of AI</div>
   </div>
   <div class="synaptiq-product">
-    <div class="synaptiq-product-name">Data Quality Platform</div>
+    <div class="synaptiq-product-name">Data Profiling Tool</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 st.caption(
     "Profile Unity Catalog tables and surface data quality issues. "
-    "Compare two tables to detect schema drift and statistical distribution shift."
+    "Compare tables side-by-side to detect schema drift and statistical distribution shift."
 )
 
 # ---------------------------------------------------------------------------
