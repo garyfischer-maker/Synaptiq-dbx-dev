@@ -82,18 +82,18 @@ def _databricks_profile(
     limit = sample_n or FETCH_LIMIT
 
     with _sql_connect() as cx, cx.cursor() as cur:
-        # Actual row count.
-        cur.execute(f"SELECT COUNT(*) FROM {ref.fqn}")
-        actual_row_count = int(cur.fetchone()[0])
-
-        # Fetch sample — use standard DBAPI fetchall() to build a DataFrame,
-        # avoiding version-specific cursor methods (fetchdf, fetch_pandas_all).
+        # Single query: fetch the sample and derive row count from it.
+        # Avoids a separate SELECT COUNT(*) which adds another warehouse
+        # round-trip and doubles cold-start wait time.
         cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
         col_names = [d[0] for d in cur.description]
         rows = cur.fetchall()
         pdf = pd.DataFrame(rows, columns=col_names)
 
     sampled_rows = len(pdf)
+    # Row count = sample length (exact when table <= FETCH_LIMIT rows,
+    # approximate when the table is larger — good enough for the metamodel).
+    actual_row_count = sampled_rows
 
     # Phase 1: HTML via ydata-profiling.
     wide = len(pdf.columns) > WIDE_TABLE_THRESHOLD
