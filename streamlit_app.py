@@ -553,25 +553,43 @@ if _runtime_mode == "databricks":
             )
         with col_status:
             if warm_clicked:
-                with st.spinner("Waking up SQL warehouse …"):
-                    import time as _time
-                    _t0 = _time.time()
-                    try:
-                        from profiler.catalog import _sql_connect
-                        with _sql_connect() as _cx, _cx.cursor() as _cur:
-                            _cur.execute("SELECT 1")
-                            _cur.fetchone()
-                        _elapsed = _time.time() - _t0
-                        st.success(
-                            f"✅ Warehouse ready — took {_elapsed:.1f}s. "
-                            "Run your comparison now for fastest results."
-                        )
-                    except Exception as _exc:  # noqa: BLE001
-                        st.error(f"❌ Warehouse warm-up failed: {_exc}")
+                _warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+                if not _warehouse_id:
+                    st.error("DATABRICKS_WAREHOUSE_ID not set.")
+                else:
+                    with st.spinner(f"Starting warehouse `{_warehouse_id}` …"):
+                        import time as _time
+                        from datetime import timedelta as _td
+                        _t0 = _time.time()
+                        try:
+                            from profiler.catalog import _workspace_client
+                            _w = _workspace_client()
+                            _wh = _w.warehouses.get(id=_warehouse_id)
+                            _state = str(_wh.state).upper() if _wh.state else "UNKNOWN"
+                            if "RUNNING" in _state:
+                                st.success(
+                                    f"✅ Warehouse already running — "
+                                    f"took {_time.time()-_t0:.1f}s."
+                                )
+                            else:
+                                st.caption(f"Warehouse state: {_state} — starting …")
+                                _w.warehouses.start(id=_warehouse_id)
+                                _w.warehouses.wait_get_warehouse_running(
+                                    id=_warehouse_id,
+                                    timeout=_td(minutes=10),
+                                )
+                                _elapsed = _time.time() - _t0
+                                st.success(
+                                    f"✅ Warehouse RUNNING — took {_elapsed:.1f}s. "
+                                    "Run your comparison now."
+                                )
+                                st.session_state["compute_warmed"] = True
+                        except Exception as _exc:  # noqa: BLE001
+                            st.error(f"❌ Warehouse start failed: {_exc}")
             elif "compute_warmed" not in st.session_state:
                 st.caption(
-                    "💡 Click **Initialize Compute** to pre-warm the SQL warehouse "
-                    "before running a profile — avoids the 2–5 min cold-start wait."
+                    "💡 Click **Initialize Compute** to start the SQL warehouse "
+                    "before running a profile — avoids the cold-start wait."
                 )
 
 st.divider()
