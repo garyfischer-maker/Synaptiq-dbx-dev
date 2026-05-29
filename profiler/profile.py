@@ -37,11 +37,11 @@ from .metamodel import (
 from .storage import RunFolder, write_text
 
 
-# Maximum rows fetched from the warehouse for profiling.
-FETCH_LIMIT = 300_000
+# Default rows fetched for profiling. Keeps the interactive run fast.
+# Users can override via the "Sample N rows" slider in the UI.
+FETCH_LIMIT = 50_000
 
-# Tables wider than this render ydata-profiling in minimal mode and skip
-# per-column histograms (faster, less memory).
+# Tables wider than this skip per-column histograms (faster, less memory).
 WIDE_TABLE_THRESHOLD = 70
 
 
@@ -120,7 +120,9 @@ def _databricks_profile(
 
 def _generate_html(pdf: pd.DataFrame, title: str, wide: bool) -> str:
     from ydata_profiling import ProfileReport
-    report = ProfileReport(pdf, title=title, minimal=wide, lazy=False)
+    # Always use minimal=True for web app context — full mode (correlations,
+    # interactions, missing diagrams) is too slow for interactive use.
+    report = ProfileReport(pdf, title=title, minimal=True, lazy=False)
     return report.to_html()
 
 
