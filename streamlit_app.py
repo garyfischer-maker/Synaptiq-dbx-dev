@@ -482,6 +482,14 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 # Sidebar
 
 def _sidebar():
+    runtime = os.environ.get("PROFILER_RUNTIME", "NOT SET")
+    colour = "#2ecc71" if runtime == "databricks" else "#e74c3c"
+    st.sidebar.markdown(
+        f"<div style='background:{colour};color:white;padding:4px 8px;"
+        f"border-radius:4px;font-size:0.75rem;margin-bottom:6px;'>"
+        f"Runtime: <b>{runtime}</b></div>",
+        unsafe_allow_html=True,
+    )
     st.sidebar.markdown("""
 <div style='text-align:center; padding: 0.5rem 0 0.8rem 0;'>
   <div style='font-size:1.1rem; font-weight:700; letter-spacing:0.05em;
@@ -741,6 +749,7 @@ with tab_compare:
                     write_metamodel(folder, profiler_run)
                     write_json_schema(folder)
                     write_mermaid_diagrams(folder, profiler_run)
+                    st.caption(f"✅ Artifacts written to `{folder.path}`")
 
                 manifest = new_manifest(
                     run_id=folder.run_id, run_label=cmp_run_label or None,
@@ -780,9 +789,14 @@ with tab_compare:
                         from profiler import delta_repo
                         delta_repo.ensure_tables(cmp_out_cat, cmp_out_sch)
                         delta_repo.ingest(profiler_run, cmp_out_cat, cmp_out_sch)
-                        st.info("Run persisted to Delta governance tables.")
+                        st.caption(f"✅ Governance tables updated in `{cmp_out_cat}.{cmp_out_sch}`")
                     except Exception as exc:  # noqa: BLE001
-                        st.warning(f"Delta repo ingest skipped: {exc}")
+                        st.warning(f"Delta repo ingest skipped — {exc}")
+                else:
+                    st.caption(
+                        f"⚠️ PROFILER_RUNTIME={os.environ.get('PROFILER_RUNTIME','NOT SET')} "
+                        f"— Delta tables skipped (expected 'databricks')"
+                    )
 
                 st.success(f"Compare run complete in {time.time() - t0:.1f}s — `{folder.folder_name}`")
                 _render_run_outputs(folder, profiler_run, mode="compare")
