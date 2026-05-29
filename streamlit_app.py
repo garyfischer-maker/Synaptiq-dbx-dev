@@ -609,6 +609,29 @@ with tab_compare:
     st.subheader("3. Output destination")
     cmp_vol_ref, cmp_out_cat, cmp_out_sch, cmp_run_label = _output_section("cmp")
 
+    # Volume diagnostic — shows what's mounted so we can debug FUSE issues.
+    with st.expander("Volume diagnostic", expanded=False):
+        if st.button("Check volume mount", key="cmp_vol_check"):
+            import pathlib
+            lines = []
+            for check_path in [
+                "/Volumes",
+                f"/Volumes/{cmp_out_cat}" if cmp_out_cat else None,
+                f"/Volumes/{cmp_out_cat}/{cmp_out_sch}" if (cmp_out_cat and cmp_out_sch) else None,
+                cmp_vol_ref.path if cmp_vol_ref else None,
+            ]:
+                if not check_path:
+                    continue
+                p = pathlib.Path(check_path)
+                try:
+                    exists = p.exists()
+                    contents = sorted(str(x.name) for x in p.iterdir()) if exists else []
+                    lines.append(f"{'✅' if exists else '❌'} `{check_path}` — "
+                                 f"{'exists, contents: ' + str(contents) if exists else 'NOT FOUND'}")
+                except Exception as e:
+                    lines.append(f"⚠️ `{check_path}` — error: {e}")
+            st.code("\n".join(lines))
+
     st.divider()
 
     # ---- Validate + Run ----
