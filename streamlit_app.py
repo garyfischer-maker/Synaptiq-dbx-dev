@@ -708,6 +708,16 @@ with tab_compare:
                     run_label=cmp_run_label or None,
                 )
                 ensure_run_folder(folder)
+
+                # Immediate write test — confirms volume is writable before
+                # spending minutes on profiling.
+                try:
+                    write_text(folder, "_write_test.txt", "ok")
+                    st.caption(f"✅ Volume write OK → `{folder.path}`")
+                except Exception as exc:
+                    st.error(f"❌ Cannot write to volume: {exc}")
+                    raise
+
                 _sample_n = cmp_sample_n if cmp_sampling_mode == "Sample N rows" else None
 
                 t_profile = time.time()
