@@ -66,19 +66,37 @@ def make_run_folder(
 def ensure_run_folder(folder: RunFolder) -> None:
     """Create the run folder. In mock mode, creates under ./_mock_runs."""
     target = _mock_rewrite(folder.path)
+
+    # Pre-flight: verify the volume root is accessible before trying to create
+    # subdirectories. The FUSE mount is only established at app startup — if the
+    # volume was created after the last deploy, the mount won't exist yet.
+    vol_root = _mock_rewrite(folder.volume.path)
+    if not os.environ.get("PROFILER_RUNTIME", "mock").lower() == "mock":
+        vol_path = Path(vol_root)
+        if not vol_path.exists():
+            vol = folder.volume
+            raise FileNotFoundError(
+                f"UC Volume not mounted at {vol_root}.\n\n"
+                f"This usually means the app was deployed before the volume existed. "
+                f"Fix:\n"
+                f"  1. Confirm the volume exists:\n"
+                f"     CREATE VOLUME IF NOT EXISTS {vol.catalog}.{vol.schema}.{vol.volume};\n"
+                f"  2. Confirm SP grants:\n"
+                f"     GRANT WRITE VOLUME ON VOLUME {vol.catalog}.{vol.schema}.{vol.volume} "
+                f"TO `<app-sp>`;\n"
+                f"  3. REDEPLOY the app — the FUSE mount is only set up at app startup."
+            )
+
     try:
         Path(target).mkdir(parents=True, exist_ok=True)
-    except PermissionError:
+    except (PermissionError, OSError) as exc:
         vol = folder.volume
         raise PermissionError(
-            f"Cannot write to UC Volume at {target}. "
-            f"Ensure the volume exists and the app SP has WRITE VOLUME:\n"
-            f"  CREATE SCHEMA IF NOT EXISTS {vol.catalog}.{vol.schema};\n"
-            f"  CREATE VOLUME  IF NOT EXISTS {vol.catalog}.{vol.schema}.{vol.volume};\n"
-            f"  GRANT WRITE VOLUME ON VOLUME {vol.catalog}.{vol.schema}.{vol.volume} "
-            f"TO `<app-sp>`;\n"
-            f"Then redeploy the app so the FUSE mount is refreshed."
-        ) from None
+            f"Cannot create run folder at {target}.\n"
+            f"Volume root: {vol_root}\n"
+            f"Check SP has WRITE VOLUME on {vol.catalog}.{vol.schema}.{vol.volume} "
+            f"and redeploy the app."
+        ) from exc
 
 
 def write_text(folder: RunFolder, filename: str, content: str) -> str:
