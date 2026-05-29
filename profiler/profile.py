@@ -38,8 +38,11 @@ from .storage import RunFolder, write_text
 
 
 # Maximum rows fetched from the warehouse for profiling.
-# Increase for more accurate stats; decrease for faster runs on large tables.
-FETCH_LIMIT = 100_000
+FETCH_LIMIT = 300_000
+
+# Tables wider than this render ydata-profiling in minimal mode and skip
+# per-column histograms (faster, less memory).
+WIDE_TABLE_THRESHOLD = 70
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +93,15 @@ def _databricks_profile(
     sampled_rows = len(pdf)
 
     # Phase 1: HTML via ydata-profiling.
-    html = _generate_html(pdf, title=ref.fqn, wide=len(pdf.columns) > 30)
+    wide = len(pdf.columns) > WIDE_TABLE_THRESHOLD
+    html = _generate_html(pdf, title=ref.fqn, wide=wide)
     write_text(folder, html_filename, html)
 
     # Phase 2: column stats → metamodel.
-    columns = _profile_columns(pdf, sampled_rows)
+    columns = _profile_columns(pdf, sampled_rows, skip_histogram=wide)
     dup_rows = (
         int(pdf.duplicated().sum())
-        if len(pdf.columns) <= 30 and sampled_rows <= 50_000
+        if not wide and sampled_rows <= 50_000
         else 0
     )
 
@@ -120,9 +124,10 @@ def _generate_html(pdf: pd.DataFrame, title: str, wide: bool) -> str:
     return report.to_html()
 
 
-def _profile_columns(pdf: pd.DataFrame, row_count: int) -> list[ColumnProfile]:
+def _profile_columns(
+    pdf: pd.DataFrame, row_count: int, skip_histogram: bool = False
+) -> list[ColumnProfile]:
     columns: list[ColumnProfile] = []
-    skip_histogram = len(pdf.columns) > 50
 
     for col_name in pdf.columns:
         series = pdf[col_name]
