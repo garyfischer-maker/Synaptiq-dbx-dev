@@ -9,7 +9,7 @@ pandas>=2.0
 pydantic>=2.6,<3
 
 # Milestone 2 — profiling engine.
-ydata-profiling[pyspark]>=4.12
+ydata-profiling>=4.12
 scipy>=1.11
 openpyxl>=3.1
 # pyspark is provided by the Databricks Apps runtime; do not pin here.

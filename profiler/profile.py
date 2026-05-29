@@ -1,23 +1,19 @@
 """Per-table profiling (milestone 2).
 
-Two-phase execution:
-    Phase 1 — ydata-profiling ProfileReport  → HTML artifact written to run folder
-    Phase 2 — PySpark aggregate queries      → DatasetProfile for the metamodel
+Databricks Apps run as containerised Python web servers — they have no
+active Spark session.  This module profiles tables by:
 
-Databricks runtime: both phases run against the real Spark session.
-Mock runtime:       stub HTML written; empty DatasetProfile returned so the
-                    rest of the pipeline (metamodel, Mermaid, Delta repo) can
-                    still exercise their code paths locally.
+  1. Fetching data via the SQL warehouse into a pandas DataFrame
+     (capped at FETCH_LIMIT rows; actual row count queried separately).
+  2. Running ydata-profiling on the pandas DataFrame to produce the HTML report.
+  3. Computing per-column statistics from pandas to populate the metamodel.
 
-Design notes:
-- All Spark and ydata-profiling imports are lazy (inside functions) so the
-  module can be imported in the test environment without PySpark installed.
-- Column profiling fan-out: each column makes 1–2 Spark passes (base stats +
-  histogram).  For very wide tables (>50 columns) the histogram is skipped to
-  keep run time reasonable — the metamodel stores an empty histogram in that
-  case.
-- duplicate_rows is skipped for wide (>30 cols) or large (>200k rows) tables
-  because df.distinct().count() is expensive.
+Mock mode:  returns an empty DatasetProfile + writes a stub HTML file,
+            no warehouse or ydata-profiling required.
+
+Pure helpers (shannon_entropy, _build_histogram, _fire_alerts,
+_determine_stereotypes) have no external dependencies and are unit-tested
+in tests/test_profile.py.
 """
 
 from __future__ import annotations
@@ -26,8 +22,8 @@ import math
 import os
 from typing import Any, Optional, TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame, SparkSession
+import numpy as np
+import pandas as pd
 
 from .catalog import TableRef
 from .metamodel import (
@@ -39,6 +35,11 @@ from .metamodel import (
     NumericStats,
 )
 from .storage import RunFolder, write_text
+
+
+# Maximum rows fetched from the warehouse for profiling.
+# Increase for more accurate stats; decrease for faster runs on large tables.
+FETCH_LIMIT = 100_000
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ def profile_table(
 
 
 # ---------------------------------------------------------------------------
-# Databricks path
+# Databricks path (pandas via SQL warehouse)
 
 
 def _databricks_profile(
@@ -73,22 +74,32 @@ def _databricks_profile(
     html_filename: str,
     sample_n: Optional[int],
 ) -> DatasetProfile:
-    spark = _get_spark()
-    df = spark.table(ref.fqn)
-    row_count = df.count()
+    from .catalog import _sql_connect
 
-    if sample_n is not None and row_count > sample_n:
-        fraction = sample_n / row_count
-        df = df.sample(fraction=fraction, seed=42)
-        row_count = sample_n  # approximate post-sample count
+    limit = sample_n or FETCH_LIMIT
 
-    # Phase 1: HTML via ydata-profiling
-    html = _generate_html(df, title=ref.fqn, wide=len(df.columns) > 30)
+    with _sql_connect() as cx, cx.cursor() as cur:
+        # Actual row count (needed for dup check and profile metadata).
+        cur.execute(f"SELECT COUNT(*) FROM {ref.fqn}")
+        actual_row_count = int(cur.fetchone()[0])
+
+        # Fetch sample for profiling.
+        cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
+        pdf = cur.fetch_pandas_all()
+
+    sampled_rows = len(pdf)
+
+    # Phase 1: HTML via ydata-profiling.
+    html = _generate_html(pdf, title=ref.fqn, wide=len(pdf.columns) > 30)
     write_text(folder, html_filename, html)
 
-    # Phase 2: Spark stats → metamodel objects
-    columns = _profile_all_columns(df, row_count)
-    dup_rows = _count_duplicates(df, row_count)
+    # Phase 2: column stats → metamodel.
+    columns = _profile_columns(pdf, sampled_rows)
+    dup_rows = (
+        int(pdf.duplicated().sum())
+        if len(pdf.columns) <= 30 and sampled_rows <= 50_000
+        else 0
+    )
 
     return DatasetProfile(
         env_label=env_label,
@@ -96,73 +107,46 @@ def _databricks_profile(
         catalog=ref.catalog,
         schema=ref.schema,
         table=ref.table,
-        row_count=row_count,
+        row_count=actual_row_count,
         column_count=len(columns),
         duplicate_rows=dup_rows,
         columns=columns,
     )
 
 
-def _generate_html(df: "DataFrame", title: str, wide: bool) -> str:
-    """Run ydata-profiling and return the HTML string."""
+def _generate_html(pdf: pd.DataFrame, title: str, wide: bool) -> str:
     from ydata_profiling import ProfileReport
-
-    # Disable expensive correlation and interactions passes for wide tables.
-    kwargs: dict[str, Any] = {"title": title, "lazy": False}
-    if wide:
-        kwargs["minimal"] = True
-    report = ProfileReport(df, **kwargs)
+    report = ProfileReport(pdf, title=title, minimal=wide, lazy=False)
     return report.to_html()
 
 
-def _profile_all_columns(df: "DataFrame", row_count: int) -> list[ColumnProfile]:
-    from pyspark.sql import functions as F
-    from pyspark.sql.types import (
-        ByteType,
-        DateType,
-        DecimalType,
-        DoubleType,
-        FloatType,
-        IntegerType,
-        LongType,
-        ShortType,
-        TimestampType,
-    )
-
-    skip_histogram = len(df.columns) > 50
+def _profile_columns(pdf: pd.DataFrame, row_count: int) -> list[ColumnProfile]:
     columns: list[ColumnProfile] = []
+    skip_histogram = len(pdf.columns) > 50
 
-    for field in df.schema.fields:
-        col_name = field.name
-        dtype = field.dataType
+    for col_name in pdf.columns:
+        series = pdf[col_name]
+        dtype = series.dtype
 
         logical_type = _logical_type(dtype)
         physical_type = str(dtype)
+        nullable = bool(series.isna().any())
 
-        # Base null + distinct stats (one pass per column).
-        base = df.select(
-            (F.count("*") - F.count(F.col(col_name))).alias("null_count"),
-            F.approx_count_distinct(F.col(col_name)).alias("distinct_count"),
-        ).collect()[0]
-
-        null_count = int(base["null_count"])
+        null_count = int(series.isna().sum())
         null_pct = null_count / row_count if row_count > 0 else 0.0
-        distinct_count = int(base["distinct_count"])
+        distinct_count = int(series.nunique(dropna=True))
         distinct_pct = distinct_count / row_count if row_count > 0 else 0.0
 
-        is_numeric = isinstance(
-            dtype,
-            (IntegerType, LongType, ShortType, ByteType, FloatType, DoubleType, DecimalType),
-        )
-        is_temporal = isinstance(dtype, (DateType, TimestampType))
+        is_numeric = pd.api.types.is_numeric_dtype(dtype) and not pd.api.types.is_bool_dtype(dtype)
+        is_temporal = pd.api.types.is_datetime64_any_dtype(dtype)
 
         numeric: Optional[NumericStats] = None
         categorical: Optional[CategoricalStats] = None
 
         if is_numeric:
-            numeric = _numeric_stats(df, col_name, row_count, skip_histogram)
+            numeric = _numeric_stats(series, skip_histogram)
         elif not is_temporal:
-            categorical = _categorical_stats(df, col_name, row_count)
+            categorical = _categorical_stats(series, row_count)
 
         stereotypes = _determine_stereotypes(
             null_pct, distinct_count, distinct_pct, row_count, numeric, categorical
@@ -172,149 +156,90 @@ def _profile_all_columns(df: "DataFrame", row_count: int) -> list[ColumnProfile]
             row_count, numeric, categorical,
         )
 
-        columns.append(
-            ColumnProfile(
-                name=col_name,
-                logical_type=logical_type,
-                physical_type=physical_type,
-                nullable=field.nullable,
-                null_count=null_count,
-                null_pct=null_pct,
-                distinct_count=distinct_count,
-                distinct_pct=distinct_pct,
-                numeric=numeric,
-                categorical=categorical,
-                alerts=alerts,
-                stereotypes=stereotypes,
-            )
-        )
+        columns.append(ColumnProfile(
+            name=col_name,
+            logical_type=logical_type,
+            physical_type=physical_type,
+            nullable=nullable,
+            null_count=null_count,
+            null_pct=null_pct,
+            distinct_count=distinct_count,
+            distinct_pct=distinct_pct,
+            numeric=numeric,
+            categorical=categorical,
+            alerts=alerts,
+            stereotypes=stereotypes,
+        ))
 
     return columns
 
 
-def _numeric_stats(
-    df: "DataFrame", col_name: str, row_count: int, skip_histogram: bool
-) -> Optional[NumericStats]:
-    from pyspark.sql import functions as F
+def _numeric_stats(series: pd.Series, skip_histogram: bool) -> Optional[NumericStats]:
+    clean = series.dropna().astype(float)
+    if len(clean) == 0:
+        return None
 
-    result = df.select(
-        F.mean(F.col(col_name).cast("double")).alias("mean"),
-        F.stddev(F.col(col_name).cast("double")).alias("stddev"),
-        F.min(F.col(col_name).cast("double")).alias("min"),
-        F.max(F.col(col_name).cast("double")).alias("max"),
-        F.skewness(F.col(col_name).cast("double")).alias("skewness"),
-        F.kurtosis(F.col(col_name).cast("double")).alias("kurtosis"),
-        F.percentile_approx(
-            F.col(col_name).cast("double"),
-            [0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99],
-        ).alias("pcts"),
-    ).collect()[0]
-
-    if result["min"] is None:
-        return None  # column is entirely null
-
-    pcts = result["pcts"] or [0.0] * 7
-    lo = float(result["min"])
-    hi = float(result["max"])
+    pcts = clean.quantile([0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99]).tolist()
+    lo, hi = float(clean.min()), float(clean.max())
 
     if skip_histogram or lo == hi:
-        non_null = int(df.filter(F.col(col_name).isNotNull()).count())
         edges = [lo, hi + (1.0 if lo == hi else 0.0)]
-        counts = [non_null]
+        counts = [int(len(clean))]
     else:
         n_bins = min(20, HISTOGRAM_MAX_BINS)
-        bucket_data = _spark_histogram_buckets(df, col_name, lo, hi, n_bins)
-        edges, counts = _build_histogram(bucket_data, n_bins, lo, hi)
+        hist_counts, hist_edges = np.histogram(clean.values, bins=n_bins)
+        edges = [float(e) for e in hist_edges]
+        counts = [int(c) for c in hist_counts]
 
     return NumericStats(
-        min=lo,
-        max=hi,
-        mean=float(result["mean"] or 0.0),
-        stddev=float(result["stddev"] or 0.0),
-        p1=float(pcts[0]),
-        p5=float(pcts[1]),
-        p25=float(pcts[2]),
-        p50=float(pcts[3]),
-        p75=float(pcts[4]),
-        p95=float(pcts[5]),
-        p99=float(pcts[6]),
-        skewness=float(result["skewness"] or 0.0),
-        kurtosis=float(result["kurtosis"] or 0.0),
+        min=lo, max=hi,
+        mean=float(clean.mean()),
+        stddev=float(clean.std()),
+        p1=pcts[0], p5=pcts[1], p25=pcts[2], p50=pcts[3],
+        p75=pcts[4], p95=pcts[5], p99=pcts[6],
+        skewness=float(clean.skew()),
+        kurtosis=float(clean.kurtosis()),
         histogram_edges=edges,
         histogram_counts=counts,
     )
 
 
-def _spark_histogram_buckets(
-    df: "DataFrame", col_name: str, lo: float, hi: float, n_bins: int
-) -> dict[int, int]:
-    """Return {bucket_index: count} for non-null values in [lo, hi]."""
-    from pyspark.sql import functions as F
-
-    bucket_df = (
-        df.select(
-            F.least(
-                F.floor(
-                    ((F.col(col_name).cast("double") - lo) / (hi - lo)) * n_bins
-                ).cast("int"),
-                F.lit(n_bins - 1),
-            ).alias("bucket")
-        )
-        .filter(F.col("bucket").isNotNull())
-        .groupBy("bucket")
-        .count()
-        .orderBy("bucket")
-    )
-    return {row["bucket"]: row["count"] for row in bucket_df.collect()}
-
-
-def _categorical_stats(
-    df: "DataFrame", col_name: str, row_count: int
-) -> CategoricalStats:
-    from pyspark.sql import functions as F
-
-    top_k_rows = (
-        df.filter(F.col(col_name).isNotNull())
-        .groupBy(col_name)
-        .count()
-        .orderBy("count", ascending=False)
-        .limit(20)
-        .collect()
-    )
-    top_k = {str(row[col_name]): int(row["count"]) for row in top_k_rows}
+def _categorical_stats(series: pd.Series, row_count: int) -> CategoricalStats:
+    top_k_series = series.dropna().astype(str).value_counts().head(20)
+    top_k = {str(k): int(v) for k, v in top_k_series.items()}
     return CategoricalStats(
         top_k=top_k,
         entropy=shannon_entropy(top_k, row_count),
     )
 
 
-def _count_duplicates(df: "DataFrame", row_count: int) -> int:
-    if len(df.columns) > 30 or row_count > 200_000:
-        return 0
-    return max(0, row_count - df.distinct().count())
+def _logical_type(dtype: Any) -> str:
+    if pd.api.types.is_bool_dtype(dtype):
+        return "boolean"
+    if pd.api.types.is_integer_dtype(dtype):
+        return "integer"
+    if pd.api.types.is_float_dtype(dtype):
+        return "double"
+    if pd.api.types.is_datetime64_any_dtype(dtype):
+        return "timestamp"
+    return "string"
 
 
 # ---------------------------------------------------------------------------
-# Pure helpers — testable without PySpark
+# Pure helpers — testable without any external dependencies
 
 
 def _build_histogram(
     bucket_data: dict[int, int], n_bins: int, lo: float, hi: float
 ) -> tuple[list[float], list[int]]:
-    """Construct histogram edges and counts from pre-aggregated bucket data.
-
-    bucket_data maps bucket index (0..n_bins-1) to row count.
-    Returns (edges, counts) where len(edges) == len(counts) + 1.
-    """
     counts = [bucket_data.get(i, 0) for i in range(n_bins)]
     step = (hi - lo) / n_bins
     edges = [lo + i * step for i in range(n_bins + 1)]
-    edges[-1] = hi  # ensure exact upper boundary (avoids float drift)
+    edges[-1] = hi
     return edges, counts
 
 
 def shannon_entropy(top_k: dict[str, int], total: int) -> float:
-    """Shannon entropy (bits) computed from top-K frequency counts."""
     if total <= 0 or not top_k:
         return 0.0
     entropy = 0.0
@@ -363,95 +288,42 @@ def _fire_alerts(
     alerts: list[Alert] = []
 
     if row_count > 0 and null_count == row_count:
-        alerts.append(Alert(
-            rule="missing",
-            severity="critical",
-            message="Column is entirely null",
-        ))
-        return alerts  # no further checks make sense
+        alerts.append(Alert(rule="missing", severity="critical",
+                            message="Column is entirely null"))
+        return alerts
 
     if null_pct > 0.5:
         severity = "critical" if null_pct > 0.8 else "warn"
-        alerts.append(Alert(
-            rule="missing",
-            severity=severity,
-            message=f"{null_pct:.1%} null ({null_count:,} of {row_count:,} rows)",
-        ))
+        alerts.append(Alert(rule="missing", severity=severity,
+                            message=f"{null_pct:.1%} null ({null_count:,} of {row_count:,} rows)"))
 
     if distinct_count == 1:
-        alerts.append(Alert(
-            rule="constant",
-            severity="warn",
-            message="Only one distinct non-null value",
-        ))
+        alerts.append(Alert(rule="constant", severity="warn",
+                            message="Only one distinct non-null value"))
 
     if categorical is not None:
         if distinct_count == row_count and row_count > 0:
-            alerts.append(Alert(
-                rule="unique",
-                severity="info",
-                message="Every non-null value is unique (potential key column)",
-            ))
+            alerts.append(Alert(rule="unique", severity="info",
+                                message="Every non-null value is unique (potential key column)"))
         elif distinct_pct > 0.9:
-            alerts.append(Alert(
-                rule="high_cardinality",
-                severity="info",
-                message=f"{distinct_pct:.1%} unique ({distinct_count:,} distinct values)",
-            ))
-
+            alerts.append(Alert(rule="high_cardinality", severity="info",
+                                message=f"{distinct_pct:.1%} unique ({distinct_count:,} distinct values)"))
         if categorical.top_k:
             top_count = max(categorical.top_k.values())
             if row_count > 0 and top_count / row_count > 0.9:
                 top_val = max(categorical.top_k, key=categorical.top_k.get)
-                alerts.append(Alert(
-                    rule="imbalanced",
-                    severity="warn",
-                    message=f"'{top_val}' represents {top_count / row_count:.1%} of all rows",
-                ))
+                alerts.append(Alert(rule="imbalanced", severity="warn",
+                                    message=f"'{top_val}' represents {top_count / row_count:.1%} of all rows"))
 
     if numeric is not None and abs(numeric.skewness) > 2.0:
-        alerts.append(Alert(
-            rule="skewed",
-            severity="info",
-            message=f"Skewness = {numeric.skewness:.2f} (threshold |skewness| > 2)",
-        ))
+        alerts.append(Alert(rule="skewed", severity="info",
+                            message=f"Skewness = {numeric.skewness:.2f} (threshold |skewness| > 2)"))
 
     return alerts
 
 
-def _logical_type(dtype: Any) -> str:
-    """Map a PySpark DataType to a human-readable logical type string."""
-    # Lazy import — only called in Databricks mode.
-    from pyspark.sql.types import (
-        ByteType,
-        DateType,
-        DecimalType,
-        DoubleType,
-        FloatType,
-        IntegerType,
-        LongType,
-        ShortType,
-        StringType,
-        BooleanType,
-        TimestampType,
-        TimestampNTZType,
-    )
-    if isinstance(dtype, IntegerType):   return "integer"
-    if isinstance(dtype, LongType):      return "bigint"
-    if isinstance(dtype, ShortType):     return "smallint"
-    if isinstance(dtype, ByteType):      return "tinyint"
-    if isinstance(dtype, FloatType):     return "float"
-    if isinstance(dtype, DoubleType):    return "double"
-    if isinstance(dtype, DecimalType):   return f"decimal({dtype.precision},{dtype.scale})"
-    if isinstance(dtype, StringType):    return "string"
-    if isinstance(dtype, BooleanType):   return "boolean"
-    if isinstance(dtype, DateType):      return "date"
-    if isinstance(dtype, (TimestampType, TimestampNTZType)): return "timestamp"
-    return str(dtype).lower().replace("type()", "")
-
-
 # ---------------------------------------------------------------------------
-# Mock path — runs locally without Spark / ydata-profiling
+# Mock path
 
 
 def _mock_profile(
@@ -463,8 +335,7 @@ def _mock_profile(
     stub_html = (
         f"<html><body>"
         f"<h1>Mock Profile — {ref.fqn}</h1>"
-        f"<p>ydata-profiling not available in mock mode "
-        f"(PROFILER_RUNTIME=mock).</p>"
+        f"<p>ydata-profiling not available in mock mode.</p>"
         f"</body></html>"
     )
     write_text(folder, html_filename, stub_html)
@@ -482,11 +353,6 @@ def _mock_profile(
 
 # ---------------------------------------------------------------------------
 # Utilities
-
-
-def _get_spark() -> "SparkSession":
-    from pyspark.sql import SparkSession
-    return SparkSession.getActiveSession()
 
 
 def _runtime() -> str:
