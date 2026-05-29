@@ -82,13 +82,16 @@ def _databricks_profile(
     limit = sample_n or FETCH_LIMIT
 
     with _sql_connect() as cx, cx.cursor() as cur:
-        # Actual row count (needed for dup check and profile metadata).
+        # Actual row count.
         cur.execute(f"SELECT COUNT(*) FROM {ref.fqn}")
         actual_row_count = int(cur.fetchone()[0])
 
-        # Fetch sample for profiling.
+        # Fetch sample — use standard DBAPI fetchall() to build a DataFrame,
+        # avoiding version-specific cursor methods (fetchdf, fetch_pandas_all).
         cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
-        pdf = cur.fetch_pandas_all()
+        col_names = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        pdf = pd.DataFrame(rows, columns=col_names)
 
     sampled_rows = len(pdf)
 

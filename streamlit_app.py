@@ -762,7 +762,8 @@ with tab_compare:
                 _sample_n = cmp_sample_n if cmp_sampling_mode == "Sample N rows" else None
 
                 t_profile = time.time()
-                with st.spinner(f"Profiling {side_a['catalog']}.{side_a['schema']}.{side_a['table']} …"):
+                st.caption("⏳ Step 1/5: profiling Side A …")
+                try:
                     dataset_a = profile_table(
                         ref=TableRef(connection=side_a["connection"].name,
                                      catalog=side_a["catalog"], schema=side_a["schema"],
@@ -770,7 +771,14 @@ with tab_compare:
                         env_label=side_a["env_label"], folder=folder,
                         html_filename="profile_a.html", sample_n=_sample_n,
                     )
-                with st.spinner(f"Profiling {side_b['catalog']}.{side_b['schema']}.{side_b['table']} …"):
+                    st.caption(f"✅ Step 1/5: Side A — {dataset_a.row_count:,} rows, {dataset_a.column_count} cols")
+                except Exception as exc:
+                    st.error(f"❌ Step 1/5 failed — {exc}")
+                    st.code(traceback.format_exc(), language="python")
+                    raise
+
+                st.caption("⏳ Step 2/5: profiling Side B …")
+                try:
                     dataset_b = profile_table(
                         ref=TableRef(connection=side_b["connection"].name,
                                      catalog=side_b["catalog"], schema=side_b["schema"],
@@ -778,6 +786,12 @@ with tab_compare:
                         env_label=side_b["env_label"], folder=folder,
                         html_filename="profile_b.html", sample_n=_sample_n,
                     )
+                    st.caption(f"✅ Step 2/5: Side B — {dataset_b.row_count:,} rows, {dataset_b.column_count} cols")
+                except Exception as exc:
+                    st.error(f"❌ Step 2/5 failed — {exc}")
+                    st.code(traceback.format_exc(), language="python")
+                    raise
+
                 t_profiled = time.time() - t_profile
 
                 with st.spinner("Computing schema diff and drift metrics …"):
