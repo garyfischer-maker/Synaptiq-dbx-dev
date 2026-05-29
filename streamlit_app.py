@@ -545,11 +545,12 @@ if _runtime_mode == "databricks":
             warm_clicked = st.button(
                 "⚡ Initialize Compute",
                 type="secondary",
-                help=(
-                    "Wakes up the SQL warehouse before you run a profile. "
-                    "Click this while configuring your tables — by the time "
-                    "you hit Run, the warehouse will be ready."
-                ),
+                help="Start the SQL warehouse before running a profile.",
+            )
+            check_perms = st.button(
+                "🔍 Check warehouse permissions",
+                type="secondary",
+                key="check_wh_perms",
             )
         with col_status:
             if warm_clicked:
@@ -602,6 +603,30 @@ if _runtime_mode == "databricks":
                                 f"  TO `39ee93a7-c623-4614-90a8-c3798bb5b329`;\n"
                                 f"```"
                             )
+            if check_perms:
+                _wid = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+                try:
+                    from profiler.catalog import _workspace_client
+                    _w = _workspace_client()
+                    _perms = _w.warehouses.get_permissions(warehouse_id=_wid)
+                    _sp_id = "39ee93a7-c623-4614-90a8-c3798bb5b329"
+                    _sp_perms = [
+                        str(ac.permission_level)
+                        for ac in (_perms.access_control_list or [])
+                        if _sp_id in str(ac.service_principal_name or "")
+                        or _sp_id in str(ac.user_name or "")
+                    ]
+                    if _sp_perms:
+                        st.success(f"✅ SP has: **{', '.join(_sp_perms)}** on warehouse `{_wid}`")
+                    else:
+                        st.error(
+                            f"❌ SP `{_sp_id}` has **no permissions** on warehouse `{_wid}`.\n\n"
+                            f"Go to: SQL Warehouses → {_wid} → Permissions → "
+                            f"Add the SP with **Can use**."
+                        )
+                except Exception as _exc:
+                    st.warning(f"Could not fetch permissions: {_exc}")
+
             elif "compute_warmed" not in st.session_state:
                 st.caption(
                     "💡 Click **Initialize Compute** to start the SQL warehouse "
