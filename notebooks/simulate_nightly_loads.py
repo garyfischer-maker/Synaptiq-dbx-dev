@@ -82,7 +82,13 @@ NEW_PATIENT_DAYS            = {5, 12, 19, 26}
 NEW_PATIENTS_PER_OCCASION   = 10
 
 # ---------------------------------------------------------------------------
-# TEST drift parameters (match generate_tuva_input_layer.py)
+# Run flags — set RUN_PROD = True to also simulate 28 days for PROD schemas.
+# PROD uses its original distribution (lower charges, lower denial, lower HbA1c).
+# ---------------------------------------------------------------------------
+RUN_PROD = True   # set False to skip PROD and only update TEST
+
+# ---------------------------------------------------------------------------
+# TEST drift parameters (match generate_tuva_input_layer.py TEST distribution)
 # ---------------------------------------------------------------------------
 TEST_CHARGE_MU    = 7.2
 TEST_CHARGE_SIGMA = 0.85
@@ -90,6 +96,16 @@ TEST_DENIAL_RATE  = 0.20
 TEST_PROFESSIONAL_RATE = 0.55
 TEST_HBAC1C_MEAN  = 8.1
 TEST_BMI_MEAN     = 29.2
+
+# ---------------------------------------------------------------------------
+# PROD baseline parameters (match generate_tuva_input_layer.py PROD distribution)
+# ---------------------------------------------------------------------------
+PROD_CHARGE_MU    = 6.9
+PROD_CHARGE_SIGMA = 0.80
+PROD_DENIAL_RATE  = 0.15
+PROD_PROFESSIONAL_RATE = 0.60
+PROD_HBAC1C_MEAN  = 7.2
+PROD_BMI_MEAN     = 27.5
 
 # ---------------------------------------------------------------------------
 # Shared constants (match generate_tuva_input_layer.py)
@@ -1315,7 +1331,122 @@ for d in range(1, 29):
     })
 
 print()
-print("Part 2 complete — 28-day simulation finished.")
+print("Part 2 (TEST) complete — 28-day simulation finished.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Part 2b: 28-Day Incremental Loads — PROD Schemas
+# MAGIC
+# MAGIC Runs the same simulation for `dev.prod_main_*` using the PROD baseline
+# MAGIC distribution (lower charges, lower denial rate, lower HbA1c).
+# MAGIC Skipped when `RUN_PROD = False`.
+
+# COMMAND ----------
+
+if RUN_PROD:
+    # Override the TEST_* constants in the global namespace so the generator
+    # functions (which reference them by name) use PROD parameters.
+    TEST_CHARGE_MU         = PROD_CHARGE_MU
+    TEST_CHARGE_SIGMA      = PROD_CHARGE_SIGMA
+    TEST_DENIAL_RATE       = PROD_DENIAL_RATE
+    TEST_PROFESSIONAL_RATE = PROD_PROFESSIONAL_RATE
+    TEST_HBAC1C_MEAN       = PROD_HBAC1C_MEAN
+    TEST_BMI_MEAN          = PROD_BMI_MEAN
+
+    print("=" * 72)
+    print("PART 2b: 28-DAY INCREMENTAL LOADS — PROD SCHEMAS")
+    print(f"  Charge mu={TEST_CHARGE_MU}, denial={TEST_DENIAL_RATE:.0%}, HbA1c mean={TEST_HBAC1C_MEAN}")
+    print("=" * 72)
+    print()
+
+    _prod_enc_base = spark.table(f"`{CATALOG}`.`{PROD_CLINICAL}`.`encounter`").count()
+    _prod_rx_base  = spark.table(f"`{CATALOG}`.`{PROD_CLAIMS}`.`pharmacy_claim`").count()
+
+    prod_person_ids: list[str] = (
+        spark.table(f"`{CATALOG}`.`{PROD_MEMBERS}`.`patient`")
+        .select("person_id").limit(MAX_SAMPLE)
+        .rdd.flatMap(lambda r: [r[0]]).collect()
+    )
+    current_prod_person_ids = list(prod_person_ids)
+
+    prod_daily_summary: list[dict] = []
+
+    for d in range(1, 29):
+        rng = np.random.default_rng(seed=d + 100)   # offset seed so PROD differs from TEST
+
+        load_dttm = datetime.datetime.combine(
+            BASE_DATE + datetime.timedelta(days=d),
+            datetime.time(2, 0, 0),
+        )
+
+        new_pt_count = new_enc_count = new_clm_count = new_rx_count = 0
+
+        # New patients
+        new_prod_patient_ids: list[str] = []
+        if d in NEW_PATIENT_DAYS:
+            np_df  = _make_patient_rows(d + 100, NEW_PATIENTS_PER_OCCASION, load_dttm, rng)
+            ne_df  = _make_eligibility_rows(np_df, load_dttm, rng)
+            write_delta_append(np_df, CATALOG, PROD_MEMBERS, "patient")
+            write_delta_append(ne_df, CATALOG, PROD_MEMBERS, "eligibility")
+            new_prod_patient_ids = np_df["person_id"].tolist()
+            current_prod_person_ids.extend(new_prod_patient_ids)
+            new_pt_count = len(np_df)
+
+        # New encounters
+        n_enc = max(1, round(_prod_enc_base * DAILY_CLAIM_GROWTH_PCT))
+        if new_prod_patient_ids:
+            n_new = max(0, round(n_enc * 0.30))
+            enc_df = pd.concat([
+                _make_encounter_rows(d + 100, new_prod_patient_ids, n_new, load_dttm, rng),
+                _make_encounter_rows(d + 100, current_prod_person_ids, n_enc - n_new, load_dttm, rng),
+            ], ignore_index=True)
+        else:
+            enc_df = _make_encounter_rows(d + 100, current_prod_person_ids, n_enc, load_dttm, rng)
+        write_delta_append(enc_df, CATALOG, PROD_CLINICAL, "encounter")
+        new_enc_count = len(enc_df)
+
+        # Claims + clinical
+        clm_df  = _make_medical_claim_rows(enc_df, load_dttm, rng)
+        write_delta_append(clm_df, CATALOG, PROD_CLAIMS, "medical_claim")
+        new_clm_count = len(clm_df)
+
+        for fn, tbl in [
+            (_make_condition_rows,    ("condition",    PROD_CLINICAL)),
+            (_make_procedure_rows,    ("procedure",    PROD_CLINICAL)),
+            (_make_lab_result_rows,   ("lab_result",   PROD_CLINICAL)),
+            (_make_observation_rows,  ("observation",  PROD_CLINICAL)),
+            (_make_medication_rows,   ("medication",   PROD_CLINICAL)),
+            (_make_appointment_rows,  ("appointment",  PROD_CLINICAL)),
+        ]:
+            write_delta_append(fn(enc_df, load_dttm, rng), CATALOG, tbl[1], tbl[0])
+
+        # Pharmacy
+        n_rx   = max(1, round(_prod_rx_base * DAILY_PHARMACY_GROWTH_PCT))
+        rx_df  = _make_pharmacy_claim_rows(n_rx, current_prod_person_ids, load_dttm, rng)
+        write_delta_append(rx_df, CATALOG, PROD_CLAIMS, "pharmacy_claim")
+        new_rx_count = len(rx_df)
+
+        print(
+            f"Day {d:>2}/28  {load_dttm.date()}  |"
+            f"  {new_pt_count:>2} new pts  |"
+            f"  {new_enc_count:>3} encounters  |"
+            f"  {new_clm_count:>5} claim lines  |"
+            f"  {new_rx_count:>3} Rx claims"
+        )
+
+    # Restore TEST constants for any subsequent cells
+    TEST_CHARGE_MU         = 7.2
+    TEST_CHARGE_SIGMA      = 0.85
+    TEST_DENIAL_RATE       = 0.20
+    TEST_PROFESSIONAL_RATE = 0.55
+    TEST_HBAC1C_MEAN       = 8.1
+    TEST_BMI_MEAN          = 29.2
+
+    print()
+    print("Part 2b (PROD) complete — 28-day simulation finished.")
+else:
+    print("RUN_PROD = False — skipping PROD incremental loads.")
 
 # COMMAND ----------
 
