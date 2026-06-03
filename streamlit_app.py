@@ -676,6 +676,93 @@ def _load_suggestions() -> list:
 # Sidebar
 
 
+def _load_run_history(limit: int = 20) -> list[dict]:
+    """Query the governance Delta tables for recent run summaries."""
+    from profiler.catalog import _runtime
+    if _runtime() != "databricks":
+        return []
+    try:
+        result = _exec_suggestion_sql(f"""
+            SELECT
+                pr.run_id,
+                pr.run_label,
+                pr.created_utc,
+                pr.side_a_fqn,
+                pr.side_b_fqn,
+                COALESCE(da.row_count, 0)    AS rows_a,
+                COALESCE(da.column_count, 0) AS cols_a,
+                COALESCE(db.row_count, 0)    AS rows_b,
+                COALESCE(cc.drifted, 0)       AS drifted_cols,
+                COALESCE(cc.schema_chg, 0)    AS schema_changes,
+                COALESCE(al.alerts_a, 0)      AS alerts_a,
+                COALESCE(al.alerts_b, 0)      AS alerts_b
+            FROM dev.test_main_profiler.profiler_runs pr
+            LEFT JOIN dev.test_main_profiler.dataset_profiles da
+                ON pr.run_id = da.run_id AND da.side = 'A'
+            LEFT JOIN dev.test_main_profiler.dataset_profiles db
+                ON pr.run_id = db.run_id AND db.side = 'B'
+            LEFT JOIN (
+                SELECT run_id,
+                    COUNT(CASE WHEN verdict IN ('moderate','significant') THEN 1 END) AS drifted,
+                    COUNT(CASE WHEN schema_change != 'unchanged' THEN 1 END)          AS schema_chg
+                FROM dev.test_main_profiler.column_comparisons
+                GROUP BY run_id
+            ) cc ON pr.run_id = cc.run_id
+            LEFT JOIN (
+                SELECT run_id,
+                    COUNT(CASE WHEN side = 'A' THEN 1 END) AS alerts_a,
+                    COUNT(CASE WHEN side = 'B' THEN 1 END) AS alerts_b
+                FROM dev.test_main_profiler.column_alerts
+                GROUP BY run_id
+            ) al ON pr.run_id = al.run_id
+            ORDER BY pr.created_utc DESC
+            LIMIT {limit}
+        """)
+        if not (result.result and result.result.data_array):
+            return []
+        cols = [c.name for c in result.manifest.schema.columns]
+        return [dict(zip(cols, row)) for row in result.result.data_array]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _render_run_card(run: dict) -> None:
+    """Render a compact run summary card in the sidebar."""
+    created = str(run.get("created_utc", ""))[:16].replace("T", " ")
+    label   = run.get("run_label") or ""
+    a_fqn   = str(run.get("side_a_fqn", ""))
+    b_fqn   = str(run.get("side_b_fqn", ""))
+    # Show just table name for brevity
+    a_short = a_fqn.split(".")[-1] if a_fqn else "?"
+    b_short = b_fqn.split(".")[-1] if b_fqn else "?"
+    rows_a  = int(run.get("rows_a", 0))
+    rows_b  = int(run.get("rows_b", 0))
+    drifted = int(run.get("drifted_cols", 0))
+    schema  = int(run.get("schema_changes", 0))
+    alerts  = int(run.get("alerts_a", 0)) + int(run.get("alerts_b", 0))
+
+    drift_colour = "#e74c3c" if drifted > 0 else "#27ae60"
+    title = f"{a_short} vs {b_short}" + (f" — {label}" if label else "")
+
+    st.sidebar.markdown(
+        f"""<div style='background:rgba(255,255,255,0.1);border-radius:6px;
+            padding:7px 9px;margin-bottom:6px;font-size:0.78rem;color:white;'>
+          <div style='font-weight:600;margin-bottom:2px;white-space:nowrap;
+               overflow:hidden;text-overflow:ellipsis;' title='{title}'>{title}</div>
+          <div style='opacity:0.7;font-size:0.7rem;margin-bottom:4px;'>{created}</div>
+          <div style='display:flex;gap:6px;flex-wrap:wrap;'>
+            <span title='Side A rows'>A: {rows_a:,}</span>
+            <span title='Side B rows'>B: {rows_b:,}</span>
+            <span style='color:{drift_colour};font-weight:600;'
+                  title='Drifted columns'>⟳ {drifted}</span>
+            <span title='Schema changes'>Δ {schema}</span>
+            <span title='Total alerts'>⚠ {alerts}</span>
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
 def _sidebar():
     st.sidebar.markdown("""
 <div style='text-align:center; padding: 0.5rem 0 0.8rem 0;'>
@@ -687,16 +774,19 @@ def _sidebar():
 """, unsafe_allow_html=True)
     st.sidebar.divider()
 
-    with st.sidebar.expander("Recent runs", expanded=False):
-        vol = st.session_state.get("output_volume")
-        if vol:
-            names = list_runs(vol)
-            if not names:
-                st.caption("_No runs yet._")
-            for name in names:
-                st.caption(name)
+    with st.sidebar.expander("Run history", expanded=False):
+        if st.button("Load run history", key="load_run_history_btn"):
+            st.session_state["show_run_history"] = True
+
+        if st.session_state.get("show_run_history"):
+            runs = _load_run_history()
+            if not runs:
+                st.caption("_No runs yet — complete a profile to populate._")
+            else:
+                for run in runs:
+                    _render_run_card(run)
         else:
-            st.caption("_Select an output volume to see run history._")
+            st.caption("Click above to load from the governance tables.")
 
     st.sidebar.divider()
 
