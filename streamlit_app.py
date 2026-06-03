@@ -923,7 +923,7 @@ _logo_col, _spacer_col, _dash_col = st.columns([2, 6, 2])
 
 with _logo_col:
     import os as _os
-    _logo_path = _os.path.join(_os.path.dirname(__file__), "assets", "synaptiq_logo.png")
+    _logo_path = _os.path.join(_os.path.dirname(__file__), "assets", "Synaptiq_001.png")
     if _os.path.exists(_logo_path):
         st.image(_logo_path, width=150)
     else:
