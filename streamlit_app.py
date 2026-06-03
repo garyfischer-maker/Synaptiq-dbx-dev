@@ -168,11 +168,16 @@ section[data-testid="stSidebar"] textarea::placeholder {
     color: #9AA5B4 !important;
 }
 section[data-testid="stSidebar"] button {
-    color: #2D3748 !important;
+    background: rgba(200,149,106,0.75) !important;
+    border: none !important;
+    color: #FFFFFF !important;
+}
+section[data-testid="stSidebar"] button:hover {
+    background: #C8956A !important;
 }
 section[data-testid="stSidebar"] button p,
 section[data-testid="stSidebar"] button span {
-    color: #2D3748 !important;
+    color: #FFFFFF !important;
 }
 
 /* ── Buttons ──────────────────────────────────────────────────── */
