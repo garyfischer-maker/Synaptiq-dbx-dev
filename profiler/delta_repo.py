@@ -327,12 +327,15 @@ def ensure_tables(catalog: str, schema: str) -> None:
 
     if grant_errors:
         # Raise so the caller (streamlit) can show a visible warning.
+        tbls = " profiler_runs, dataset_profiles, column_profiles, column_alerts, column_comparisons"
         raise RuntimeError(
             "SELECT grants failed (SP may not own these tables). "
-            "Ask an admin to run:\n"
+            "Schema owner can run:\n"
             f"  GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO `account users`;\n"
-            f"  GRANT SELECT ON ALL TABLES IN SCHEMA {catalog}.{schema} TO `account users`;\n"
-            f"Errors: {'; '.join(grant_errors)}"
+            + "\n".join(
+                f"  GRANT SELECT ON TABLE {catalog}.{schema}.{t.strip()} TO `account users`;"
+                for t in tbls.split(",")
+            ) + f"\nErrors: {'; '.join(grant_errors)}"
         )
 
 
