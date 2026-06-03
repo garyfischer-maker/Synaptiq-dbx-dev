@@ -301,9 +301,31 @@ def _exec_sql(statement: str) -> None:
 
 
 def ensure_tables(catalog: str, schema: str) -> None:
-    """Create the five governance tables if they don't exist."""
+    """Create the five governance tables if they don't exist.
+
+    Also grants USE SCHEMA + SELECT to account users so workspace members
+    can query the governance tables directly (SP owns them; it can grant).
+    """
     for stmt in _ddl(catalog, schema):
         _exec_sql(stmt)
+
+    # Make tables readable by all workspace users.
+    q = f"`{catalog}`.`{schema}`"
+    try:
+        _exec_sql(
+            f"GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} "
+            f"TO `account users`"
+        )
+        for tbl in (
+            "profiler_runs", "dataset_profiles", "column_profiles",
+            "column_alerts", "column_comparisons",
+        ):
+            _exec_sql(
+                f"GRANT SELECT ON TABLE {catalog}.{schema}.{tbl} "
+                f"TO `account users`"
+            )
+    except Exception:  # noqa: BLE001
+        pass  # Grant failure is non-fatal — tables still work for the app
 
 
 def ingest(
