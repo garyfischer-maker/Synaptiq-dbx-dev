@@ -155,7 +155,9 @@ section[data-testid="stSidebar"] * {
 section[data-testid="stSidebar"] .streamlit-expanderHeader {
     color: rgba(255,255,255,0.85) !important;
 }
-/* Input fields inside sidebar need dark text so it's readable */
+/* Input fields and buttons inside sidebar need dark text to be readable.
+   The global sidebar * { color: white } rule must be overridden for these
+   light-background elements — add any new sidebar widget types here. */
 section[data-testid="stSidebar"] input,
 section[data-testid="stSidebar"] textarea {
     color: #2D3748 !important;
@@ -164,6 +166,13 @@ section[data-testid="stSidebar"] textarea {
 section[data-testid="stSidebar"] input::placeholder,
 section[data-testid="stSidebar"] textarea::placeholder {
     color: #9AA5B4 !important;
+}
+section[data-testid="stSidebar"] button {
+    color: #2D3748 !important;
+}
+section[data-testid="stSidebar"] button p,
+section[data-testid="stSidebar"] button span {
+    color: #2D3748 !important;
 }
 
 /* ── Buttons ──────────────────────────────────────────────────── */

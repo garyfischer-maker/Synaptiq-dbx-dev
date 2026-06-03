@@ -123,6 +123,25 @@ section[data-testid="stSidebar"] * {
 section[data-testid="stSidebar"] .streamlit-expanderHeader {
     color: rgba(255,255,255,0.85) !important;
 }
+/* IMPORTANT: The * rule above turns ALL sidebar text white, including
+   light-background widgets. Always add explicit dark-text overrides for
+   any widget that has a white/light background inside the sidebar. */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] textarea {
+    color: #2D3748 !important;
+    background: #FFFFFF !important;
+}
+section[data-testid="stSidebar"] input::placeholder,
+section[data-testid="stSidebar"] textarea::placeholder {
+    color: #9AA5B4 !important;
+}
+section[data-testid="stSidebar"] button {
+    color: #2D3748 !important;
+}
+section[data-testid="stSidebar"] button p,
+section[data-testid="stSidebar"] button span {
+    color: #2D3748 !important;
+}
 
 /* ── Buttons ──────────────────────────────────────────────────── */
 div[data-testid="stButton"] > button[kind="primary"] {
