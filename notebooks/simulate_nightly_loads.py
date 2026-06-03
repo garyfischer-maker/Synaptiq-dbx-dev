@@ -1363,11 +1363,11 @@ if RUN_PROD:
     _prod_enc_base = spark.table(f"`{CATALOG}`.`{PROD_CLINICAL}`.`encounter`").count()
     _prod_rx_base  = spark.table(f"`{CATALOG}`.`{PROD_CLAIMS}`.`pharmacy_claim`").count()
 
-    prod_person_ids: list[str] = (
+    prod_person_ids: list[str] = [
+        row["person_id"] for row in
         spark.table(f"`{CATALOG}`.`{PROD_MEMBERS}`.`patient`")
-        .select("person_id").limit(MAX_SAMPLE)
-        .rdd.flatMap(lambda r: [r[0]]).collect()
-    )
+        .select("person_id").limit(MAX_SAMPLE).collect()
+    ]
     current_prod_person_ids = list(prod_person_ids)
 
     prod_daily_summary: list[dict] = []
