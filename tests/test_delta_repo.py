@@ -292,9 +292,9 @@ class TestDDL:
         for stmt in self.stmts:
             assert "`dev`.`test_main_profiler`" in stmt
 
-    def test_all_partitioned_by_created_date(self):
+    def test_all_use_cluster_by(self):
         for stmt in self.stmts:
-            assert "PARTITIONED BY (created_date)" in stmt
+            assert "CLUSTER BY" in stmt
 
     def test_run_id_in_profiler_runs(self):
         assert "run_id" in self.stmts[0]

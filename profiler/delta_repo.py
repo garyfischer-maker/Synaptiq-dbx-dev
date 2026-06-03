@@ -12,7 +12,7 @@ Table layout:
     column_comparisons   — one row per column comparison per run
 
 All tables:
-    - PARTITIONED BY created_date (DATE)
+    - CLUSTER BY (Liquid Clustering) — no PARTITIONED BY
     - LIQUID CLUSTERING on (catalog, schema, table, column_name) where applicable
     - MERGE on run_id (UUIDv7) as the idempotent key — safe to re-ingest a run
     - Retention: 1 year; daily OPTIMIZE + weekly VACUUM handled externally
@@ -50,7 +50,6 @@ def _ddl(catalog: str, schema: str) -> list[str]:
     lineage_json    STRING
 )
 USING DELTA
-PARTITIONED BY (created_date)
 CLUSTER BY (run_id)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
 
@@ -69,7 +68,6 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
     duplicate_rows  BIGINT
 )
 USING DELTA
-PARTITIONED BY (created_date)
 CLUSTER BY (catalog, schema, table)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
 
@@ -99,7 +97,6 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
     cat_top_k_json  STRING
 )
 USING DELTA
-PARTITIONED BY (created_date)
 CLUSTER BY (catalog, schema, table, column_name)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
 
@@ -117,7 +114,6 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
     message         STRING
 )
 USING DELTA
-PARTITIONED BY (created_date)
 CLUSTER BY (catalog, schema, table, column_name)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
 
@@ -142,7 +138,6 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
     stereotypes     STRING
 )
 USING DELTA
-PARTITIONED BY (created_date)
 CLUSTER BY (catalog_a, schema_a, table_a, column_name)
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')""",
     ]
