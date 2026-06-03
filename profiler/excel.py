@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -28,6 +28,7 @@ from .metamodel import (
     DatasetProfile,
     ProfilerRun,
 )
+from .row_diff import RowDiffResult
 from .storage import RunFolder
 
 
@@ -67,6 +68,7 @@ def write_workbook(
     folder: RunFolder,
     run: ProfilerRun,
     filename: str = "ab_summary.xlsx",
+    row_diff: Optional[RowDiffResult] = None,
 ) -> str:
     """Write the Excel summary workbook. Returns the file path."""
     from .storage import write_bytes
@@ -79,6 +81,8 @@ def write_workbook(
     _sheet_column_metrics(wb, run)
     _sheet_alerts(wb, run)
     _sheet_drift_scores(wb, run)
+    if row_diff is not None:
+        _sheet_row_diff(wb, row_diff)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -378,5 +382,78 @@ def _top_value(col: ColumnProfile) -> str:
         count = col.categorical.top_k[key]
         return f"{key} ({count:,})"
     return "—"
+
+
+def _sheet_row_diff(wb: openpyxl.Workbook, rd: RowDiffResult) -> None:
+    ws = wb.create_sheet("RowDiff")
+
+    # Summary section
+    title = ws.cell(row=1, column=1, value="Row-Level Diff Summary")
+    title.font = _TITLE_FONT
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 18
+
+    summary_rows = [
+        ("Key columns", ", ".join(rd.key_columns)),
+        ("Rows removed (only in Side A)", f"{rd.rows_only_in_a:,}"),
+        ("Rows added (only in Side B)",   f"{rd.rows_only_in_b:,}"),
+        ("Rows changed (same key, diff values)", f"{rd.rows_changed:,}"),
+        ("Rows identical",               f"{rd.rows_identical:,}"),
+    ]
+    for label, value in summary_rows:
+        ws.append([label, value])
+        ws.cell(row=ws.max_row, column=1).font = _HEADER_FONT
+
+    if rd.error:
+        ws.append([])
+        ws.cell(row=ws.max_row + 1, column=1,
+                 value=f"Error: {rd.error}").font = Font(color="FF0000")
+        return
+
+    col_names = rd.col_names or []
+
+    # Removed rows sample
+    if rd.sample_removed:
+        ws.append([])
+        ws.append(["--- Sample: Removed rows (in Side A, not in Side B) ---"])
+        ws.cell(row=ws.max_row, column=1).font = _HEADER_FONT
+        _write_header_row(ws, col_names)
+        for row in rd.sample_removed:
+            ws.append([str(v) if v is not None else "" for v in row])
+            for ci in range(1, len(col_names) + 1):
+                ws.cell(row=ws.max_row, column=ci).fill = _RED_FILL
+
+    # Added rows sample
+    if rd.sample_added:
+        ws.append([])
+        ws.append(["--- Sample: Added rows (in Side B, not in Side A) ---"])
+        ws.cell(row=ws.max_row, column=1).font = _HEADER_FONT
+        _write_header_row(ws, col_names)
+        for row in rd.sample_added:
+            ws.append([str(v) if v is not None else "" for v in row])
+            for ci in range(1, len(col_names) + 1):
+                ws.cell(row=ws.max_row, column=ci).fill = _GREEN_FILL
+
+    # Changed rows sample (interleaved A/B)
+    if rd.sample_changed:
+        ws.append([])
+        ws.append(["--- Sample: Changed rows (A row then B row per key) ---"])
+        ws.cell(row=ws.max_row, column=1).font = _HEADER_FONT
+        changed_headers = (rd.col_names or [])
+        _write_header_row(ws, changed_headers)
+        prev_key = None
+        fill_toggle = True
+        for row in rd.sample_changed:
+            # Use first key column to detect pair boundaries
+            key_val = row[0] if row else None
+            if key_val != prev_key:
+                fill_toggle = not fill_toggle
+                prev_key = key_val
+            fill = _BLUE_FILL if fill_toggle else _YELLOW_FILL
+            ws.append([str(v) if v is not None else "" for v in row])
+            for ci in range(1, len(changed_headers) + 1):
+                ws.cell(row=ws.max_row, column=ci).fill = fill
+
+    _autofit(ws, col_names or ["A"])
 
 

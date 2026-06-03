@@ -33,6 +33,7 @@ from profiler.catalog import (
     load_env_labels,
 )
 from profiler.compare import compare_tables, schema_change_counts
+from profiler.row_diff import RowDiffResult, compute_row_diff, diff_pct, summarise
 from profiler.excel import write_workbook
 from profiler.manifest import ComparisonParams, SideSpec, new_manifest
 from profiler.metamodel import DatasetProfile, Lineage, ProfilerRun, new_run_id
@@ -408,7 +409,12 @@ def _output_section(key: str) -> tuple[Optional[VolumeRef], str, str]:
     return vol_ref, out_cat, out_sch, run_label
 
 
-def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
+def _render_run_outputs(
+    folder,
+    profiler_run: ProfilerRun,
+    mode: str,
+    row_diff: Optional[RowDiffResult] = None,
+) -> None:
     """Display run results inline: summary stats, Mermaid diagrams, HTML iframes."""
     st.divider()
     st.subheader("Run outputs")
@@ -532,6 +538,53 @@ document.addEventListener('DOMContentLoaded',async function(){{
                 components.html(html_content, height=800, scrolling=True)
             except Exception:
                 st.info(f"`{fname}` not yet available — profile may still be generating.")
+
+    # Row diff results
+    if row_diff is not None and mode == "compare":
+        st.markdown("#### Row-level diff")
+        if row_diff.error:
+            st.warning(f"Row diff error: {row_diff.error}")
+        else:
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Removed", f"{row_diff.rows_only_in_a:,}",
+                      help="Rows in Side A with no matching key in Side B")
+            r2.metric("Added",   f"{row_diff.rows_only_in_b:,}",
+                      help="Rows in Side B with no matching key in Side A")
+            r3.metric("Changed", f"{row_diff.rows_changed:,}",
+                      help="Rows with same key but different values")
+            r4.metric("Identical", f"{row_diff.rows_identical:,}",
+                      help="Rows with same key and identical values")
+
+            if row_diff.has_differences:
+                import pandas as _pd
+                cols = row_diff.col_names or []
+                rdiff_tabs = st.tabs(["Removed", "Added", "Changed"])
+                with rdiff_tabs[0]:
+                    if row_diff.sample_removed:
+                        st.dataframe(
+                            _pd.DataFrame(row_diff.sample_removed, columns=cols),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.caption("No removed rows.")
+                with rdiff_tabs[1]:
+                    if row_diff.sample_added:
+                        st.dataframe(
+                            _pd.DataFrame(row_diff.sample_added, columns=cols),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.caption("No added rows.")
+                with rdiff_tabs[2]:
+                    if row_diff.sample_changed:
+                        st.dataframe(
+                            _pd.DataFrame(row_diff.sample_changed),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.caption("No changed rows.")
+            else:
+                st.success("All matched rows are identical — no row-level differences found.")
 
     # Artifact paths
     with st.expander("Output file locations", expanded=False):
@@ -846,7 +899,7 @@ with tab_compare:
             "Depth",
             options=[
                 "Aggregate + distributions + schema diff",
-                "Include row-level diff (requires row key — milestone 6)",
+                "Include row-level diff (requires row key)",
             ],
             index=0, horizontal=False, key="cmp_depth",
         )
@@ -992,8 +1045,36 @@ with tab_compare:
 
                 t_profiled = time.time() - t_profile
 
-                with st.spinner("Computing schema diff and drift metrics …"):
-                    comparisons = compare_tables(dataset_a, dataset_b)
+                st.caption("⏳ Step 3/5: schema diff + drift metrics …")
+                comparisons = compare_tables(dataset_a, dataset_b)
+                st.caption("✅ Step 3/5: schema diff + drift complete")
+
+                # ── Optional row-level diff ───────────────────────────────
+                row_diff_result: Optional[RowDiffResult] = None
+                if with_row_level and row_keys:
+                    st.caption(f"⏳ Step 3b/5: row-level diff on keys {row_keys} …")
+                    ref_a = TableRef(
+                        connection=side_a["connection"].name,
+                        catalog=side_a["catalog"], schema=side_a["schema"],
+                        table=side_a["table"],
+                    )
+                    ref_b = TableRef(
+                        connection=side_b["connection"].name,
+                        catalog=side_b["catalog"], schema=side_b["schema"],
+                        table=side_b["table"],
+                    )
+                    row_diff_result = compute_row_diff(
+                        ref_a, ref_b, row_keys, max_mismatches
+                    )
+                    if row_diff_result.error:
+                        st.warning(f"Row diff warning: {row_diff_result.error}")
+                    else:
+                        st.caption(
+                            f"✅ Step 3b/5: row diff — "
+                            f"{row_diff_result.rows_only_in_a:,} removed, "
+                            f"{row_diff_result.rows_only_in_b:,} added, "
+                            f"{row_diff_result.rows_changed:,} changed"
+                        )
 
                 profiler_run = ProfilerRun(
                     run_id=new_run_id(), run_label=cmp_run_label or None,
@@ -1007,8 +1088,9 @@ with tab_compare:
                     ),
                 )
 
+                st.caption("⏳ Step 4/5: writing artifacts …")
                 with st.spinner("Writing Excel workbook, metamodel, and Mermaid diagrams …"):
-                    write_workbook(folder, profiler_run)
+                    write_workbook(folder, profiler_run, row_diff=row_diff_result)
                     write_metamodel(folder, profiler_run)
                     write_json_schema(folder)
                     write_mermaid_diagrams(folder, profiler_run)
@@ -1069,7 +1151,8 @@ with tab_compare:
                     )
 
                 st.success(f"Compare run complete in {time.time() - t0:.1f}s — `{folder.folder_name}`")
-                _render_run_outputs(folder, profiler_run, mode="compare")
+                _render_run_outputs(folder, profiler_run, mode="compare",
+                                    row_diff=row_diff_result)
 
             except Exception:  # noqa: BLE001
                 st.error("Run failed.")
