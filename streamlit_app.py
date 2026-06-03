@@ -417,26 +417,29 @@ def _render_run_outputs(
 ) -> None:
     """Display run results inline: summary stats, Mermaid diagrams, HTML iframes."""
     st.divider()
-    st.subheader("Run outputs")
+    st.subheader("Profile results" if mode == "profile" else "Comparison results")
 
     # Summary metrics
     a = profiler_run.side_a
     b = profiler_run.side_b if mode == "compare" else None
+    is_compare = mode == "compare"
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Side A rows", f"{a.row_count:,}")
-    col1.metric("Side A columns", a.column_count)
+
+    # Use neutral labels in profile mode; "Side A / Side B" only in compare mode
+    col1.metric("Side A rows"    if is_compare else "Rows",    f"{a.row_count:,}")
+    col1.metric("Side A columns" if is_compare else "Columns", a.column_count)
     if b:
-        col2.metric("Side B rows", f"{b.row_count:,}")
+        col2.metric("Side B rows",    f"{b.row_count:,}")
         col2.metric("Side B columns", b.column_count)
 
     total_alerts_a = sum(len(c.alerts) for c in a.columns)
-    col3.metric("Side A alerts", total_alerts_a)
+    col3.metric("Side A alerts" if is_compare else "Alerts", total_alerts_a)
     if b:
         total_alerts_b = sum(len(c.alerts) for c in b.columns)
         col3.metric("Side B alerts", total_alerts_b)
 
-    if mode == "compare" and profiler_run.comparisons:
+    if is_compare and profiler_run.comparisons:
         changes = schema_change_counts(profiler_run.comparisons)
         n_drifted = sum(
             1 for c in profiler_run.comparisons
