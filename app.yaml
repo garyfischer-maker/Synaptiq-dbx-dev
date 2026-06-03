@@ -35,3 +35,9 @@ env:
 
   - name: "PROFILER_RUNTIME"
     value: "databricks"           # set to "mock" for local dev
+
+  # Genie Space ID for the Ask Genie conversational tab.
+  # Find it in Databricks UI: AI/BI → Genie Spaces → your space → URL.
+  # Leave empty to hide the tab until a space is configured.
+  - name: "GENIE_SPACE_ID"
+    value: "01f15f8e849e1c31a47c5785d07751bf"

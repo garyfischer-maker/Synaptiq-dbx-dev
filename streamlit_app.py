@@ -1037,7 +1037,13 @@ if _runtime_mode == "databricks":
                 )
 
 st.divider()
-tab_compare, tab_profile = st.tabs(["⚖️  Compare two tables", "🔍  Profile table(s)"])
+_GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID", "")
+
+tab_compare, tab_profile, tab_genie = st.tabs([
+    "⚖️  Compare two tables",
+    "🔍  Profile table(s)",
+    "🤖  Ask Genie",
+])
 
 
 # ===========================================================================
@@ -1523,3 +1529,139 @@ with tab_profile:
             except Exception:  # noqa: BLE001
                 st.error("Run failed.")
                 st.code(traceback.format_exc(), language="python")
+
+
+# ===========================================================================
+# TAB 3 — ASK GENIE
+# ===========================================================================
+
+with tab_genie:
+    st.markdown(
+        "Ask natural-language questions about your profiling runs, drift metrics, "
+        "and data quality alerts. Genie queries the governance tables and returns "
+        "an answer, the SQL it ran, and the result set."
+    )
+
+    if not _GENIE_SPACE_ID:
+        st.warning(
+            "**Genie Space ID not configured.**  \n"
+            "Add `GENIE_SPACE_ID` to `app.yaml` → `env` section, then redeploy:\n"
+            "```yaml\n- name: GENIE_SPACE_ID\n  value: \"<your-space-id>\"\n```\n"
+            "Find your Space ID in the Databricks UI: "
+            "**AI/BI → Genie Spaces → your space → URL contains the ID.**"
+        )
+    else:
+        from profiler.genie_chat import ask, GenieResult
+
+        # Initialise conversation state
+        if "genie_conv_id" not in st.session_state:
+            st.session_state["genie_conv_id"] = None
+        if "genie_messages" not in st.session_state:
+            st.session_state["genie_messages"] = []
+
+        # Controls row
+        gcol1, gcol2 = st.columns([6, 1])
+        with gcol2:
+            if st.button("Clear chat", key="genie_clear"):
+                st.session_state["genie_conv_id"] = None
+                st.session_state["genie_messages"] = []
+                st.rerun()
+
+        with gcol1:
+            st.caption(
+                f"Space: `{_GENIE_SPACE_ID[:8]}...`  "
+                + ("| Conversation active" if st.session_state["genie_conv_id"] else "| New conversation")
+            )
+
+        # Render conversation history
+        for msg in st.session_state["genie_messages"]:
+            with st.chat_message(msg["role"],
+                                  avatar="🧑" if msg["role"] == "user" else "🤖"):
+                st.markdown(msg["content"])
+                if msg.get("sql"):
+                    with st.expander("Generated SQL", expanded=False):
+                        st.code(msg["sql"], language="sql")
+                if msg.get("rows") and msg.get("col_names"):
+                    import pandas as _pd
+                    st.dataframe(
+                        _pd.DataFrame(msg["rows"], columns=msg["col_names"]),
+                        use_container_width=True,
+                        height=min(300, 38 + len(msg["rows"]) * 35),
+                    )
+
+        # Suggested starter questions
+        if not st.session_state["genie_messages"]:
+            st.markdown("**Try asking:**")
+            suggestions = [
+                "How many profiler runs have completed this month?",
+                "Which columns have the highest PSI drift across all runs?",
+                "Show me the top 10 columns with critical alerts.",
+                "What schema changes were detected in the last 7 days?",
+                "Compare average PSI for medical_claim vs lab_result tables.",
+            ]
+            for s in suggestions:
+                if st.button(s, key=f"genie_suggestion_{s[:20]}"):
+                    st.session_state["genie_pending_question"] = s
+                    st.rerun()
+
+        # Chat input
+        prompt = st.chat_input(
+            "Ask Genie about your profiling data…",
+            key="genie_input",
+        )
+        # Also pick up a suggestion button click
+        if not prompt and st.session_state.pop("genie_pending_question", None):
+            prompt = st.session_state.get("genie_pending_question_val")
+
+        if prompt:
+            # Add user message immediately
+            st.session_state["genie_messages"].append({
+                "role": "user", "content": prompt,
+            })
+
+            with st.chat_message("assistant", avatar="🤖"):
+                with st.spinner("Genie is thinking…"):
+                    try:
+                        result, conv_id, _ = ask(
+                            _GENIE_SPACE_ID,
+                            prompt,
+                            conv_id=st.session_state["genie_conv_id"],
+                        )
+                        st.session_state["genie_conv_id"] = conv_id
+
+                        if result.error:
+                            response_text = f"⚠️ {result.error}"
+                        else:
+                            response_text = result.text_response or "(No text response)"
+
+                        st.markdown(response_text)
+
+                        if result.sql:
+                            with st.expander("Generated SQL", expanded=False):
+                                st.code(result.sql, language="sql")
+
+                        if result.has_data:
+                            import pandas as _pd
+                            st.dataframe(
+                                _pd.DataFrame(result.rows, columns=result.col_names),
+                                use_container_width=True,
+                                height=min(300, 38 + len(result.rows) * 35),
+                            )
+
+                        st.session_state["genie_messages"].append({
+                            "role": "assistant",
+                            "content": response_text,
+                            "sql": result.sql,
+                            "rows": result.rows,
+                            "col_names": result.col_names,
+                        })
+
+                    except Exception as exc:  # noqa: BLE001
+                        err_msg = f"❌ Genie error: {exc}"
+                        st.error(err_msg)
+                        st.session_state["genie_messages"].append({
+                            "role": "assistant", "content": err_msg,
+                        })
+
+            st.rerun()
+
