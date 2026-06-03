@@ -1015,6 +1015,13 @@ with tab_compare:
                         delta_repo.ensure_tables(cmp_out_cat, cmp_out_sch)
                         delta_repo.ingest(profiler_run, cmp_out_cat, cmp_out_sch)
                         st.caption(f"✅ Governance tables updated in `{cmp_out_cat}.{cmp_out_sch}`")
+                    except RuntimeError as exc:
+                        # Grant errors surface here — ingest may have succeeded
+                        msg = str(exc)
+                        if "GRANT" in msg.upper() or "grant" in msg:
+                            st.warning(f"⚠️ Tables written but grants need admin help:\n{msg}")
+                        else:
+                            st.warning(f"Delta repo issue — {exc}")
                     except Exception as exc:  # noqa: BLE001
                         st.warning(f"Delta repo ingest skipped — {exc}")
                 else:

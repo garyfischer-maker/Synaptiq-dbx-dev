@@ -309,23 +309,31 @@ def ensure_tables(catalog: str, schema: str) -> None:
     for stmt in _ddl(catalog, schema):
         _exec_sql(stmt)
 
-    # Make tables readable by all workspace users.
-    q = f"`{catalog}`.`{schema}`"
-    try:
-        _exec_sql(
-            f"GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} "
-            f"TO `account users`"
-        )
-        for tbl in (
-            "profiler_runs", "dataset_profiles", "column_profiles",
-            "column_alerts", "column_comparisons",
-        ):
+    # Grant SELECT on each governance table to account users.
+    # The SP owns the tables so it can grant SELECT on them.
+    # USE SCHEMA is NOT granted here — the schema owner must do that separately.
+    grant_errors: list[str] = []
+    for tbl in (
+        "profiler_runs", "dataset_profiles", "column_profiles",
+        "column_alerts", "column_comparisons",
+    ):
+        try:
             _exec_sql(
-                f"GRANT SELECT ON TABLE {catalog}.{schema}.{tbl} "
+                f"GRANT SELECT ON TABLE `{catalog}`.`{schema}`.`{tbl}` "
                 f"TO `account users`"
             )
-    except Exception:  # noqa: BLE001
-        pass  # Grant failure is non-fatal — tables still work for the app
+        except Exception as exc:  # noqa: BLE001
+            grant_errors.append(f"{tbl}: {exc}")
+
+    if grant_errors:
+        # Raise so the caller (streamlit) can show a visible warning.
+        raise RuntimeError(
+            "SELECT grants failed (SP may not own these tables). "
+            "Ask an admin to run:\n"
+            f"  GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO `account users`;\n"
+            f"  GRANT SELECT ON ALL TABLES IN SCHEMA {catalog}.{schema} TO `account users`;\n"
+            f"Errors: {'; '.join(grant_errors)}"
+        )
 
 
 def ingest(
