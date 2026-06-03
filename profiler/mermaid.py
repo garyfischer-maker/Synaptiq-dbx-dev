@@ -65,6 +65,12 @@ def render_drift(run: ProfilerRun) -> str:
     """Mermaid classDiagram showing only columns with non-stable verdicts."""
     drifted = [c for c in run.comparisons if c.verdict != "stable"]
 
+    # Dagre layout engine fails with "Could not find a suitable point" when
+    # class node IDs are long.  Cap at 20 chars — full name still appears
+    # inside the class body via the column: field.
+    def _drift_id(side: str, col_name: str) -> str:
+        return f"side{side}_{_safe(col_name)[:20]}"
+
     lines: list[str] = ["classDiagram"]
 
     if not drifted:
@@ -79,8 +85,8 @@ def render_drift(run: ProfilerRun) -> str:
     b_cols = {c.name: c for c in run.side_b.columns}
 
     for cmp in drifted:
-        a_id = f"sideA_{_safe(cmp.column_name)}"
-        b_id = f"sideB_{_safe(cmp.column_name)}"
+        a_id = _drift_id("A", cmp.column_name)
+        b_id = _drift_id("B", cmp.column_name)
         lines += _drift_col_class(a_id, "A", cmp, a_cols.get(cmp.column_name))
         lines += _drift_col_class(b_id, "B", cmp, b_cols.get(cmp.column_name))
         lines.append(f"    {a_id} --> {b_id} : {_drift_label(cmp)}")
@@ -101,11 +107,10 @@ def _safe(name: str) -> str:
 
 
 def _tbl_id(profile: DatasetProfile) -> str:
-    return (
-        f"tbl_{_safe(profile.catalog)}"
-        f"_{_safe(profile.schema_)}"
-        f"_{_safe(profile.table)}"
-    )
+    # Keep IDs short to avoid Dagre layout errors with long identifiers.
+    sch = _safe(profile.schema_)[-15:]   # last 15 chars of schema (env suffix)
+    tbl = _safe(profile.table)[:20]
+    return f"tbl_{sch}_{tbl}"
 
 
 def _table_class(
