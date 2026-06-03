@@ -453,11 +453,12 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
             try:
                 mmd_src = read_text(path)
                 components.html(
-                    f"""
-                    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-                    <div class="mermaid">{mmd_src}</div>
-                    <script>mermaid.initialize({{startOnLoad:true, theme:'default'}});</script>
-                    """,
+                    f"""<!DOCTYPE html><html><head>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
+</head><body style="background:white;margin:8px">
+<pre class="mermaid">{mmd_src}</pre>
+<script>mermaid.initialize({{startOnLoad:true,theme:'default',securityLevel:'loose'}});</script>
+</body></html>""",
                     height=500, scrolling=True,
                 )
             except Exception:
@@ -495,11 +496,35 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 # Suggestions helpers
 
 
+def _exec_suggestion_sql(statement: str) -> any:
+    """Run a SQL statement for suggestions via Statement Execution API."""
+    import os as _os, time as _time
+    from profiler.catalog import _workspace_client
+    w = _workspace_client()
+    wid = _os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    result = w.statement_execution.execute_statement(
+        warehouse_id=wid, statement=statement, wait_timeout="50s"
+    )
+    deadline = _time.time() + 120
+    while True:
+        state = str(result.status.state).upper() if result.status else "UNKNOWN"
+        if "SUCCEEDED" in state:
+            return result
+        if any(s in state for s in ("FAILED", "CANCELLED", "CLOSED")):
+            err = (result.status.error.message
+                   if (result.status and result.status.error) else state)
+            raise RuntimeError(err)
+        if _time.time() > deadline:
+            raise TimeoutError("Timed out after 2 minutes")
+        _time.sleep(2)
+        result = w.statement_execution.get_statement(result.statement_id)
+
+
 def _submit_suggestion(name: str, suggestion: str) -> str:
     """Insert a suggestion row. Returns '' on success, error string on failure."""
     import uuid
     from datetime import datetime, timezone
-    from profiler.catalog import _sql_connect, _runtime
+    from profiler.catalog import _runtime
     if _runtime() != "databricks":
         return "Suggestions are only stored in Databricks mode."
     sid = str(uuid.uuid4())
@@ -507,21 +532,17 @@ def _submit_suggestion(name: str, suggestion: str) -> str:
     name_e = (name or "Anonymous").replace("'", "''")
     sugg_e = suggestion.replace("'", "''")
     try:
-        with _sql_connect() as cx, cx.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS `dev`.`test_main_profiler`.`user_suggestions` (
-                    suggestion_id STRING    NOT NULL,
-                    submitted_by  STRING,
-                    suggestion    STRING    NOT NULL,
-                    submitted_at  TIMESTAMP NOT NULL
-                ) USING DELTA
-                TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')
-            """)
-            cur.execute(
-                f"INSERT INTO `dev`.`test_main_profiler`.`user_suggestions` "
-                f"(suggestion_id, submitted_by, suggestion, submitted_at) "
-                f"VALUES ('{sid}', '{name_e}', '{sugg_e}', TIMESTAMP '{now}')"
-            )
+        _exec_suggestion_sql("""
+            CREATE TABLE IF NOT EXISTS `dev`.`test_main_profiler`.`user_suggestions` (
+                suggestion_id STRING NOT NULL, submitted_by STRING,
+                suggestion STRING NOT NULL, submitted_at TIMESTAMP NOT NULL
+            ) USING DELTA TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true')
+        """)
+        _exec_suggestion_sql(
+            f"INSERT INTO `dev`.`test_main_profiler`.`user_suggestions` "
+            f"(suggestion_id, submitted_by, suggestion, submitted_at) "
+            f"VALUES ('{sid}', '{name_e}', '{sugg_e}', TIMESTAMP '{now}')"
+        )
         return ""
     except Exception as exc:  # noqa: BLE001
         return str(exc)
@@ -529,17 +550,18 @@ def _submit_suggestion(name: str, suggestion: str) -> str:
 
 def _load_suggestions() -> list:
     """Return up to 20 most-recent suggestions."""
-    from profiler.catalog import _sql_connect, _runtime
+    from profiler.catalog import _runtime
     if _runtime() != "databricks":
         return []
     try:
-        with _sql_connect() as cx, cx.cursor() as cur:
-            cur.execute("""
-                SELECT submitted_by, suggestion, submitted_at
-                FROM `dev`.`test_main_profiler`.`user_suggestions`
-                ORDER BY submitted_at DESC LIMIT 20
-            """)
-            return cur.fetchall()
+        result = _exec_suggestion_sql("""
+            SELECT submitted_by, suggestion, submitted_at
+            FROM `dev`.`test_main_profiler`.`user_suggestions`
+            ORDER BY submitted_at DESC LIMIT 20
+        """)
+        if result.result and result.result.data_array:
+            return result.result.data_array
+        return []
     except Exception:  # noqa: BLE001
         return []
 
@@ -549,14 +571,6 @@ def _load_suggestions() -> list:
 
 
 def _sidebar():
-    runtime = os.environ.get("PROFILER_RUNTIME", "NOT SET")
-    colour = "#2ecc71" if runtime == "databricks" else "#e74c3c"
-    st.sidebar.markdown(
-        f"<div style='background:{colour};color:white;padding:4px 8px;"
-        f"border-radius:4px;font-size:0.75rem;margin-bottom:6px;'>"
-        f"Runtime: <b>{runtime}</b></div>",
-        unsafe_allow_html=True,
-    )
     st.sidebar.markdown("""
 <div style='text-align:center; padding: 0.5rem 0 0.8rem 0;'>
   <div style='font-size:1.1rem; font-weight:700; letter-spacing:0.05em;
@@ -671,11 +685,6 @@ if _runtime_mode == "databricks":
                 type="secondary",
                 help="Start the SQL warehouse before running a profile.",
             )
-            check_perms = st.button(
-                "🔍 Check warehouse permissions",
-                type="secondary",
-                key="check_wh_perms",
-            )
         with col_status:
             if warm_clicked:
                 _warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
@@ -727,31 +736,7 @@ if _runtime_mode == "databricks":
                                 f"  TO `39ee93a7-c623-4614-90a8-c3798bb5b329`;\n"
                                 f"```"
                             )
-            if check_perms:
-                _wid = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
-                try:
-                    from profiler.catalog import _workspace_client
-                    _w = _workspace_client()
-                    _perms = _w.warehouses.get_permissions(warehouse_id=_wid)
-                    _sp_id = "39ee93a7-c623-4614-90a8-c3798bb5b329"
-                    _sp_perms = [
-                        str(ac.permission_level)
-                        for ac in (_perms.access_control_list or [])
-                        if _sp_id in str(ac.service_principal_name or "")
-                        or _sp_id in str(ac.user_name or "")
-                    ]
-                    if _sp_perms:
-                        st.success(f"✅ SP has: **{', '.join(_sp_perms)}** on warehouse `{_wid}`")
-                    else:
-                        st.error(
-                            f"❌ SP `{_sp_id}` has **no permissions** on warehouse `{_wid}`.\n\n"
-                            f"Go to: SQL Warehouses → {_wid} → Permissions → "
-                            f"Add the SP with **Can use**."
-                        )
-                except Exception as _exc:
-                    st.warning(f"Could not fetch permissions: {_exc}")
-
-            elif "compute_warmed" not in st.session_state:
+            if not warm_clicked and "compute_warmed" not in st.session_state:
                 st.caption(
                     "💡 Click **Initialize Compute** to start the SQL warehouse "
                     "before running a profile — avoids the cold-start wait."
