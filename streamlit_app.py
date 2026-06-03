@@ -225,6 +225,40 @@ def _env_labels() -> List[str]:
 # Cache catalog/schema/table lookups so the warehouse is only hit once per
 # TTL window, not on every Streamlit re-run (which happens on every widget
 # interaction). This prevents the UI from blocking while the warehouse wakes.
+@st.cache_data(ttl=120, show_spinner=False)
+def _table_has_meta_load(catalog: str, schema: str, table: str) -> bool:
+    """Check if table has META_Load_DTTM column (via UC REST — no warehouse needed)."""
+    try:
+        from profiler.catalog import _workspace_client
+        info = _workspace_client().tables.get(full_name=f"{catalog}.{schema}.{table}")
+        return any(
+            (c.name or "").lower() == "meta_load_dttm"
+            for c in (info.columns or [])
+        )
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_dates_for_table(catalog: str, schema: str, table: str) -> List[str]:
+    """Return distinct load dates from META_Load_DTTM, newest first."""
+    from profiler.catalog import _runtime
+    if _runtime() != "databricks":
+        return []
+    try:
+        result = _exec_suggestion_sql(
+            f"SELECT DISTINCT DATE(META_Load_DTTM) AS d "
+            f"FROM `{catalog}`.`{schema}`.`{table}` "
+            f"WHERE META_Load_DTTM IS NOT NULL "
+            f"ORDER BY d DESC LIMIT 60"
+        )
+        if result.result and result.result.data_array:
+            return [str(row[0]) for row in result.result.data_array if row[0]]
+        return []
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=120)
 def _cached_schemas(catalog: str) -> List[str]:
     conn = _connections()[0] if _connections() else None
@@ -328,12 +362,37 @@ def _table_picker(key: str, title: str = "", default_env_idx: int = 0) -> dict:
         placeholder="— pick a table —",
     )
 
+    # ── Load date filter (META_Load_DTTM) ────────────────────────
+    load_date: Optional[str] = None
+    if catalog and schema and table:
+        has_meta = _table_has_meta_load(catalog, schema, table)
+        if has_meta:
+            filter_on = st.checkbox(
+                "Filter by load date (META_Load_DTTM)",
+                key=f"{key}_filter_date",
+                help="Profile only rows from a specific nightly load batch.",
+            )
+            if filter_on:
+                dates = _load_dates_for_table(catalog, schema, table)
+                if dates:
+                    chosen = st.selectbox(
+                        "Load date",
+                        options=["All dates (full table)"] + dates,
+                        key=f"{key}_load_date",
+                        help="Newest load first.",
+                    )
+                    if chosen != "All dates (full table)":
+                        load_date = chosen
+                else:
+                    st.caption("No load dates found — warehouse may be offline.")
+
     return {
         "env_label": env_label,
         "connection": conn,
         "catalog": catalog,
         "schema": schema,
         "table": table,
+        "load_date": load_date,
     }
 
 
@@ -1128,6 +1187,7 @@ with tab_compare:
                                      table=side_a["table"]),
                         env_label=side_a["env_label"], folder=folder,
                         html_filename="profile_a.html", sample_n=_sample_n,
+                        load_date=side_a.get("load_date"),
                     )
                     st.caption(f"✅ Step 1/5: Side A — {dataset_a.row_count:,} rows, {dataset_a.column_count} cols")
                 except Exception as exc:
@@ -1143,6 +1203,7 @@ with tab_compare:
                                      table=side_b["table"]),
                         env_label=side_b["env_label"], folder=folder,
                         html_filename="profile_b.html", sample_n=_sample_n,
+                        load_date=side_b.get("load_date"),
                     )
                     st.caption(f"✅ Step 2/5: Side B — {dataset_b.row_count:,} rows, {dataset_b.column_count} cols")
                 except Exception as exc:
@@ -1396,6 +1457,7 @@ with tab_profile:
                                          table=side["table"]),
                             env_label=side["env_label"], folder=folder,
                             html_filename="profile_a.html", sample_n=_sample_n,
+                            load_date=side.get("load_date"),
                         )
 
                     # Build a single-side ProfilerRun (side_b mirrors side_a,

@@ -55,6 +55,7 @@ def profile_table(
     folder: RunFolder,
     html_filename: str,
     sample_n: Optional[int] = None,
+    load_date: Optional[str] = None,
 ) -> DatasetProfile:
     """Profile one Unity Catalog table.
 
@@ -63,14 +64,14 @@ def profile_table(
     """
     if _runtime() == "mock":
         return _mock_profile(ref, env_label, folder, html_filename)
-    return _databricks_profile(ref, env_label, folder, html_filename, sample_n)
+    return _databricks_profile(ref, env_label, folder, html_filename, sample_n, load_date)
 
 
 # ---------------------------------------------------------------------------
 # Databricks path (pandas via SQL warehouse)
 
 
-def _fetch_via_statement_api(fqn: str, limit: int) -> pd.DataFrame:
+def _fetch_via_statement_api(fqn: str, limit: int, where: str = "") -> pd.DataFrame:
     """Fetch table data using the Databricks Statement Execution REST API.
 
     Uses WorkspaceClient (same auth as catalog lookups) instead of the JDBC
@@ -88,9 +89,14 @@ def _fetch_via_statement_api(fqn: str, limit: int) -> pd.DataFrame:
         raise RuntimeError("DATABRICKS_WAREHOUSE_ID not set.")
 
     # Submit — wait up to 50s synchronously (API maximum).
+    sql = f"SELECT * FROM {fqn}"
+    if where:
+        sql += f" WHERE {where}"
+    sql += f" LIMIT {limit}"
+
     result = w.statement_execution.execute_statement(
         warehouse_id=warehouse_id,
-        statement=f"SELECT * FROM {fqn} LIMIT {limit}",
+        statement=sql,
         wait_timeout="50s",
     )
 
@@ -126,6 +132,7 @@ def _databricks_profile(
     folder: RunFolder,
     html_filename: str,
     sample_n: Optional[int],
+    load_date: Optional[str] = None,
 ) -> DatasetProfile:
     from .catalog import _sql_connect
 
@@ -151,7 +158,8 @@ def _databricks_profile(
     except Exception:
         pass  # Permission to check state may be absent; proceed anyway
 
-    pdf = _fetch_via_statement_api(ref.fqn, limit)
+    where = f"DATE(META_Load_DTTM) = '{load_date}'" if load_date else ""
+    pdf = _fetch_via_statement_api(ref.fqn, limit, where=where)
 
     sampled_rows = len(pdf)
     # Row count = sample length (exact when table <= FETCH_LIMIT rows,
