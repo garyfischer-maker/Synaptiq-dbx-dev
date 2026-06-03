@@ -458,43 +458,64 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
 <html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
 <style>
-  body {{ margin:8px; background:white; font-family:sans-serif; }}
-  #zoom-controls {{ position:fixed; top:6px; right:6px; display:flex; gap:4px; z-index:99; }}
-  #zoom-controls button {{
-    background:#8BA4BD; color:white; border:none; border-radius:4px;
-    padding:4px 10px; font-size:13px; cursor:pointer; font-weight:600;
-  }}
-  #zoom-controls button:hover {{ background:#6B8EAD; }}
-  #wrap {{ overflow:auto; width:100%; }}
-  #diagram {{ transform-origin:top left; display:inline-block; padding:8px; }}
+  body{{margin:0;background:white;overflow:hidden}}
+  #ctrl{{position:sticky;top:0;z-index:100;background:rgba(255,255,255,.95);
+         padding:4px 8px;display:flex;gap:4px;align-items:center;
+         border-bottom:1px solid #e0e8f0}}
+  #ctrl button{{background:#8BA4BD;color:white;border:none;border-radius:4px;
+                padding:3px 10px;font-size:12px;cursor:pointer;font-weight:600}}
+  #ctrl button:hover{{background:#6B8EAD}}
+  #ctrl span{{font-size:12px;color:#666;min-width:38px;text-align:center}}
+  #outer{{overflow:auto;width:100%;height:calc(100vh - 36px);padding:8px;box-sizing:border-box}}
+  #inner{{transform-origin:top left;display:inline-block;min-width:100%}}
+  #err{{color:#c0392b;padding:8px;font-size:12px}}
+  pre.src{{font-size:10px;color:#888;white-space:pre-wrap;word-break:break-all}}
 </style>
-</head>
-<body>
-<div id="zoom-controls">
-  <button onclick="z(0.2)">＋</button>
-  <button onclick="z(-0.2)">－</button>
-  <button onclick="reset()">↺ Reset</button>
+</head><body>
+<div id="ctrl">
+  <button onclick="z(0.25)">＋ Zoom in</button>
+  <button onclick="z(-0.25)">－ Zoom out</button>
+  <button onclick="fit()">⊡ Fit</button>
+  <button onclick="reset()">1:1</button>
+  <span id="pct">100%</span>
 </div>
-<div id="wrap"><div id="diagram">
-<pre class="mermaid">{mmd_escaped}</pre>
+<div id="outer"><div id="inner">
+  <pre class="mermaid">{mmd_escaped}</pre>
 </div></div>
 <script>
-  var sc = 1;
-  function z(d) {{
-    sc = Math.max(0.2, Math.min(4, sc + d));
-    document.getElementById('diagram').style.transform = 'scale(' + sc + ')';
+var sc=1;
+function applyScale(){{
+  var inner=document.getElementById('inner');
+  inner.style.transform='scale('+sc+')';
+  inner.style.width=(100/sc)+'%';
+  document.getElementById('pct').textContent=Math.round(sc*100)+'%';
+}}
+function z(d){{sc=Math.max(0.1,Math.min(5,sc+d));applyScale();}}
+function reset(){{sc=1;applyScale();}}
+function fit(){{
+  var outer=document.getElementById('outer');
+  var svg=outer.querySelector('svg');
+  if(svg){{sc=Math.min(1,(outer.clientWidth-20)/svg.getBoundingClientRect().width);applyScale();}}
+}}
+mermaid.initialize({{startOnLoad:false,theme:'default',securityLevel:'loose',
+  er:{{useMaxWidth:false}},flowchart:{{useMaxWidth:false}}}});
+document.addEventListener('DOMContentLoaded',async function(){{
+  try{{
+    await mermaid.run({{querySelector:'.mermaid'}});
+    setTimeout(fit,200);
+  }}catch(e){{
+    document.getElementById('inner').innerHTML=
+      '<div id="err">Render error: '+e.message+'</div>'+
+      '<details><summary style="cursor:pointer;color:#666;font-size:11px">Show source</summary>'+
+      '<pre class="src">'+{repr(mmd_escaped)}+'</pre></details>';
   }}
-  function reset() {{ sc = 1; z(0); }}
-  mermaid.initialize({{ startOnLoad: false, theme: 'default', securityLevel: 'loose' }});
-  document.addEventListener('DOMContentLoaded', function() {{
-    mermaid.run({{ querySelector: '.mermaid' }});
-  }});
+}});
 </script>
 </body></html>""",
-                    height=520, scrolling=True,
+                    height=580, scrolling=False,
                 )
-            except Exception:
-                st.info(f"`{fname}` not yet available.")
+            except Exception as exc:
+                st.warning(f"`{fname}` — {exc}")
 
     # HTML profile reports (iframe)
     st.markdown("#### Profile reports")
