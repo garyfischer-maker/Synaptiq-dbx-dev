@@ -146,9 +146,12 @@ def compute_row_diff(
         # (LIMIT before UNION ALL is invalid in Databricks SQL)
         if result.rows_changed > 0:
             ck_join = " AND ".join(f"ck.`{k}` <=> src.`{k}`" for k in key_columns)
+            # Qualify with ha. to avoid ambiguous column reference when both
+            # ha and hb have the same key column names.
+            ha_key_sel = ", ".join(f"ha.`{k}`" for k in key_columns)
             changed_cte = (
                 f"{hash_cte},\n"
-                f"ck AS (SELECT {key_sel} FROM ha JOIN hb ON {key_join} "
+                f"ck AS (SELECT {ha_key_sel} FROM ha JOIN hb ON {key_join} "
                 f"WHERE ha._rh != hb._rh LIMIT {max_sample})"
             )
             r_a = _sql(f"{changed_cte} SELECT src.* FROM {a} src JOIN ck ON {ck_join}")
