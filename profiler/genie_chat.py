@@ -119,7 +119,18 @@ def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
     kwargs: dict = {}
     if body is not None:
         kwargs["body"] = body
-    return w.api_client.do(method, path, **kwargs) or {}
+    try:
+        return w.api_client.do(method, path, **kwargs) or {}
+    except Exception as exc:
+        msg = str(exc)
+        if "403" in msg or "PERMISSION_DENIED" in msg or "not authorized" in msg.lower():
+            space_id = path.split("/spaces/")[1].split("/")[0] if "/spaces/" in path else "?"
+            raise PermissionError(
+                f"The app service principal does not have access to Genie Space '{space_id}'.\n\n"
+                f"Fix: Databricks workspace → AI/BI → Genie Spaces → your space → "
+                f"Permissions → Add SP '39ee93a7-c623-4614-90a8-c3798bb5b329' with Can Run."
+            ) from exc
+        raise
 
 
 def _extract_result(space_id: str, conv_id: str, msg_id: str, msg: dict) -> GenieResult:
