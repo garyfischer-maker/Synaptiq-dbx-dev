@@ -279,15 +279,36 @@ def flatten(run: "ProfilerRun") -> dict[str, list[dict[str, Any]]]:
 # Ingest: write flattened rows to Delta via Spark MERGE
 
 
-def ensure_tables(catalog: str, schema: str) -> None:
-    """Create the five governance tables if they don't exist.
+def _exec_sql(statement: str) -> None:
+    """Execute one SQL statement via Statement Execution API (no JDBC)."""
+    import os as _os, time as _time
+    from .catalog import _workspace_client
+    w = _workspace_client()
+    wid = _os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    result = w.statement_execution.execute_statement(
+        warehouse_id=wid,
+        statement=statement,
+        wait_timeout="50s",
+    )
+    deadline = _time.time() + 300
+    while True:
+        state = str(result.status.state).upper() if result.status else "UNKNOWN"
+        if "SUCCEEDED" in state:
+            return
+        if any(s in state for s in ("FAILED", "CANCELLED", "CLOSED")):
+            err = (result.status.error.message
+                   if (result.status and result.status.error) else state)
+            raise RuntimeError(f"SQL failed ({state}): {err}")
+        if _time.time() > deadline:
+            raise TimeoutError(f"SQL still {state} after 5 minutes")
+        _time.sleep(2)
+        result = w.statement_execution.get_statement(result.statement_id)
 
-    Uses the SQL warehouse (no Spark session required).
-    """
-    from .catalog import _sql_connect
-    with _sql_connect() as cx, cx.cursor() as cur:
-        for stmt in _ddl(catalog, schema):
-            cur.execute(stmt)
+
+def ensure_tables(catalog: str, schema: str) -> None:
+    """Create the five governance tables if they don't exist."""
+    for stmt in _ddl(catalog, schema):
+        _exec_sql(stmt)
 
 
 def ingest(
@@ -298,27 +319,29 @@ def ingest(
     """Insert one ProfilerRun into the five governance tables.
 
     Idempotent: deletes any existing rows for this run_id before inserting.
-    Uses the SQL warehouse (no Spark session required).
+    Uses batch INSERT (one statement per table, not one per row).
     """
-    from .catalog import _sql_connect
-
     rows_by_table = flatten(run)
     run_id = str(run.run_id)
     q = f"`{catalog}`.`{schema}`"
 
-    with _sql_connect() as cx, cx.cursor() as cur:
-        for table_name, table_rows in rows_by_table.items():
-            if not table_rows:
-                continue
-            full_name = f"{q}.`{table_name}`"
-            # Idempotent: remove any prior rows for this run_id.
-            cur.execute(f"DELETE FROM {full_name} WHERE run_id = '{run_id}'")
-            # Insert all rows.
-            cols = list(table_rows[0].keys())
-            col_list = ", ".join(f"`{c}`" for c in cols)
-            for row in table_rows:
-                values = ", ".join(_sql_literal(row[c]) for c in cols)
-                cur.execute(f"INSERT INTO {full_name} ({col_list}) VALUES ({values})")
+    for table_name, table_rows in rows_by_table.items():
+        if not table_rows:
+            continue
+        full_name = f"{q}.`{table_name}`"
+        _exec_sql(f"DELETE FROM {full_name} WHERE run_id = '{run_id}'")
+
+        # Batch INSERT — all rows in one statement.
+        cols = list(table_rows[0].keys())
+        col_list = ", ".join(f"`{c}`" for c in cols)
+        value_rows = []
+        for row in table_rows:
+            vals = ", ".join(_sql_literal(row[c]) for c in cols)
+            value_rows.append(f"({vals})")
+        _exec_sql(
+            f"INSERT INTO {full_name} ({col_list}) "
+            f"VALUES {', '.join(value_rows)}"
+        )
 
 
 def _sql_literal(val: Any) -> str:
