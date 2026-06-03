@@ -452,11 +452,13 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
             path = f"{folder.path}/{fname}"
             try:
                 mmd_src = read_text(path)
+                import html as _html
+                mmd_escaped = _html.escape(mmd_src)
                 components.html(
                     f"""<!DOCTYPE html><html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
 </head><body style="background:white;margin:8px">
-<pre class="mermaid">{mmd_src}</pre>
+<pre class="mermaid">{mmd_escaped}</pre>
 <script>mermaid.initialize({{startOnLoad:true,theme:'default',securityLevel:'loose'}});</script>
 </body></html>""",
                     height=500, scrolling=True,
