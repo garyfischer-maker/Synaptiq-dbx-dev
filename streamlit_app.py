@@ -446,22 +446,52 @@ def _render_run_outputs(folder, profiler_run: ProfilerRun, mode: str) -> None:
     mmd_files = (["schema_a.mmd", "schema_b.mmd", "drift.mmd"]
                  if mode == "compare" else ["schema_a.mmd"])
 
+    import html as _html
     mmd_tabs = st.tabs(mmd_tab_labels)
     for tab, fname in zip(mmd_tabs, mmd_files):
         with tab:
             path = f"{folder.path}/{fname}"
             try:
                 mmd_src = read_text(path)
-                import html as _html
                 mmd_escaped = _html.escape(mmd_src)
-                components.html(
-                    f"""<!DOCTYPE html><html><head>
+                components.html(f"""<!DOCTYPE html>
+<html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js"></script>
-</head><body style="background:white;margin:8px">
+<style>
+  body {{ margin:8px; background:white; font-family:sans-serif; }}
+  #zoom-controls {{ position:fixed; top:6px; right:6px; display:flex; gap:4px; z-index:99; }}
+  #zoom-controls button {{
+    background:#8BA4BD; color:white; border:none; border-radius:4px;
+    padding:4px 10px; font-size:13px; cursor:pointer; font-weight:600;
+  }}
+  #zoom-controls button:hover {{ background:#6B8EAD; }}
+  #wrap {{ overflow:auto; width:100%; }}
+  #diagram {{ transform-origin:top left; display:inline-block; padding:8px; }}
+</style>
+</head>
+<body>
+<div id="zoom-controls">
+  <button onclick="z(0.2)">＋</button>
+  <button onclick="z(-0.2)">－</button>
+  <button onclick="reset()">↺ Reset</button>
+</div>
+<div id="wrap"><div id="diagram">
 <pre class="mermaid">{mmd_escaped}</pre>
-<script>mermaid.initialize({{startOnLoad:true,theme:'default',securityLevel:'loose'}});</script>
+</div></div>
+<script>
+  var sc = 1;
+  function z(d) {{
+    sc = Math.max(0.2, Math.min(4, sc + d));
+    document.getElementById('diagram').style.transform = 'scale(' + sc + ')';
+  }}
+  function reset() {{ sc = 1; z(0); }}
+  mermaid.initialize({{ startOnLoad: false, theme: 'default', securityLevel: 'loose' }});
+  document.addEventListener('DOMContentLoaded', function() {{
+    mermaid.run({{ querySelector: '.mermaid' }});
+  }});
+</script>
 </body></html>""",
-                    height=500, scrolling=True,
+                    height=520, scrolling=True,
                 )
             except Exception:
                 st.info(f"`{fname}` not yet available.")
