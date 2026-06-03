@@ -74,27 +74,43 @@ def _fetch_via_statement_api(fqn: str, limit: int) -> pd.DataFrame:
     """Fetch table data using the Databricks Statement Execution REST API.
 
     Uses WorkspaceClient (same auth as catalog lookups) instead of the JDBC
-    SQL connector — avoids the port-443 JDBC handshake that can hang in
-    some network configurations.
+    SQL connector — avoids JDBC connection issues in some network configs.
+
+    wait_timeout is capped at 50s by the API; longer queries are polled.
     """
     from .catalog import _workspace_client
     import os as _os
+    import time as _time
 
     w = _workspace_client()
     warehouse_id = _os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
     if not warehouse_id:
         raise RuntimeError("DATABRICKS_WAREHOUSE_ID not set.")
 
+    # Submit — wait up to 50s synchronously (API maximum).
     result = w.statement_execution.execute_statement(
         warehouse_id=warehouse_id,
         statement=f"SELECT * FROM {fqn} LIMIT {limit}",
-        wait_timeout="300s",
+        wait_timeout="50s",
     )
 
-    state = str(result.status.state) if result.status else "UNKNOWN"
-    if "SUCCEEDED" not in state.upper():
-        err = result.status.error.message if (result.status and result.status.error) else state
-        raise RuntimeError(f"Statement execution failed ({state}): {err}")
+    # Poll if still running after the initial wait.
+    _deadline = _time.time() + 600  # 10-minute total timeout
+    while True:
+        state = str(result.status.state).upper() if result.status else "UNKNOWN"
+        if "SUCCEEDED" in state:
+            break
+        if any(s in state for s in ("FAILED", "CANCELLED", "CLOSED")):
+            err = (result.status.error.message
+                   if (result.status and result.status.error) else state)
+            raise RuntimeError(f"Statement execution failed ({state}): {err}")
+        if _time.time() > _deadline:
+            raise TimeoutError(
+                f"Statement still {state} after 10 minutes. "
+                f"Try a smaller table or use 'Sample N rows'."
+            )
+        _time.sleep(2)
+        result = w.statement_execution.get_statement(result.statement_id)
 
     if not result.manifest or not result.manifest.schema:
         return pd.DataFrame()
