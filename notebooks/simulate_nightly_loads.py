@@ -267,8 +267,9 @@ def write_delta_append(pdf: pd.DataFrame, catalog: str, schema: str, table: str)
 # MAGIC `META_Load_DTTM` to 28 days ago (day zero of the simulation) so that PROD
 # MAGIC data appears as a pre-existing baseline relative to the incremental loads.
 # MAGIC
-# MAGIC Safe to rerun: `ADD COLUMN IF NOT EXISTS` is idempotent; the UPDATE only
-# MAGIC fires where the column is still NULL.
+# MAGIC Safe to rerun: existing columns are checked via schema inspection before
+# MAGIC ALTER TABLE so no duplicate-column errors occur. The UPDATE only fires
+# MAGIC where META_Load_DTTM is still NULL.
 
 # COMMAND ----------
 
@@ -321,8 +322,15 @@ print()
 for schema, table in ALL_TABLES:
     full_name = f"`{CATALOG}`.`{schema}`.`{table}`"
     try:
-        spark.sql(f"ALTER TABLE {full_name} ADD COLUMN IF NOT EXISTS META_data_source STRING")
-        spark.sql(f"ALTER TABLE {full_name} ADD COLUMN IF NOT EXISTS META_Load_DTTM TIMESTAMP")
+        # ADD COLUMN IF NOT EXISTS is not supported on all Databricks runtimes.
+        # Check existing columns first and only ALTER when the column is absent.
+        existing_cols = {f.name.lower() for f in spark.table(full_name).schema.fields}
+
+        if "meta_data_source" not in existing_cols:
+            spark.sql(f"ALTER TABLE {full_name} ADD COLUMN META_data_source STRING")
+        if "meta_load_dttm" not in existing_cols:
+            spark.sql(f"ALTER TABLE {full_name} ADD COLUMN META_Load_DTTM TIMESTAMP")
+
         spark.sql(f"""
             UPDATE {full_name}
             SET    META_data_source = data_source,
