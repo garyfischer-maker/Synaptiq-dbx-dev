@@ -223,11 +223,12 @@ print("Reference data loaded.")
 
 def write_delta_append(pdf: pd.DataFrame, catalog: str, schema: str, table: str) -> int:
     """
-    Append a pandas DataFrame to an existing Delta table using saveAsTable(mode=append).
+    Append a pandas DataFrame to an existing Delta table.
 
-    NullType guard: Spark infers all-None columns as NullType, which Parquet
-    cannot physically store. Any NullType column is cast to StringType before
-    writing. mergeSchema=true allows new incremental columns to be added safely.
+    Type alignment: reads the target table's schema and casts each column in the
+    incoming DataFrame to the exact type already on disk.  This prevents
+    DELTA_FAILED_TO_MERGE_FIELDS errors when an all-None column is inferred as
+    NullType (or StringType) but the target column is DATE, TIMESTAMP, etc.
 
     Returns the number of rows appended.
     """
@@ -240,10 +241,24 @@ def write_delta_append(pdf: pd.DataFrame, catalog: str, schema: str, table: str)
     full_name = f"`{catalog}`.`{schema}`.`{table}`"
     sdf = spark.createDataFrame(pdf)
 
-    # Cast any all-None (NullType) columns to StringType so Parquet can store them.
+    # Read the target schema once and build a name → DataType map.
+    try:
+        target_types = {f.name: f.dataType for f in spark.table(full_name).schema.fields}
+    except Exception:
+        target_types = {}
+
     for field in sdf.schema.fields:
+        col = field.name
         if isinstance(field.dataType, NullType):
-            sdf = sdf.withColumn(field.name, F.lit(None).cast(StringType()))
+            # Cast to target type when known; fall back to STRING.
+            cast_type = target_types.get(col, StringType())
+            sdf = sdf.withColumn(col, F.lit(None).cast(cast_type))
+        elif col in target_types and str(field.dataType) != str(target_types[col]):
+            # Coerce mismatched types (e.g. STRING → DATE) to match target.
+            try:
+                sdf = sdf.withColumn(col, F.col(col).cast(target_types[col]))
+            except Exception:
+                pass  # leave as-is; mergeSchema will handle or raise clearly
 
     (sdf.write
         .format("delta")
@@ -251,8 +266,7 @@ def write_delta_append(pdf: pd.DataFrame, catalog: str, schema: str, table: str)
         .option("mergeSchema", "true")
         .saveAsTable(full_name))
 
-    n = len(pdf)
-    return n
+    return len(pdf)
 
 # COMMAND ----------
 
