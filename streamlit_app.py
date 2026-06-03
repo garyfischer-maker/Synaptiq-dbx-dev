@@ -80,14 +80,7 @@ st.markdown("""
     align-items: center;
     gap: 1rem;
 }
-.synaptiq-logo-mark {
-    width: 38px; height: 38px;
-    border: 2.5px solid rgba(200,149,106,0.9);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; color: #C8956A;
-    flex-shrink: 0;
-}
+/* .synaptiq-logo-mark removed — replaced by st.image() above the header bar */
 .synaptiq-wordmark {
     color: #FFFFFF;
     font-size: 1.35rem;
@@ -924,11 +917,40 @@ def _sidebar():
 _sidebar()
 
 # ---------------------------------------------------------------------------
-# Main layout
+# Main layout — logo row + dashboard link, then blue header bar
 
+_logo_col, _spacer_col, _dash_col = st.columns([2, 6, 2])
+
+with _logo_col:
+    import os as _os
+    _logo_path = _os.path.join(_os.path.dirname(__file__), "assets", "synaptiq_logo.png")
+    if _os.path.exists(_logo_path):
+        st.image(_logo_path, width=150)
+    else:
+        # Fallback styled wordmark until logo file is added to assets/
+        st.markdown(
+            "<div style='font-size:1.3rem;font-weight:800;letter-spacing:0.05em;"
+            "color:#2D3748;padding-top:6px;'>Synaptiq.</div>",
+            unsafe_allow_html=True,
+        )
+
+with _dash_col:
+    st.markdown(
+        """<div style='text-align:right;padding-top:4px;'>
+        <a href="https://adb-7405619521761591.11.azuredatabricks.net/dashboardsv3/01f15f7d18171dac85cdc247e47d48a5/published?o=7405619521761591"
+           target="_blank" style="text-decoration:none;">
+          <button style="background:#C8956A;color:white;border:none;border-radius:6px;
+                         padding:8px 18px;font-weight:600;font-size:0.85rem;
+                         letter-spacing:0.04em;cursor:pointer;white-space:nowrap;">
+            Go To Dashboard ↗
+          </button>
+        </a></div>""",
+        unsafe_allow_html=True,
+    )
+
+# Blue brand header bar (logo mark removed — replaced by image above)
 st.markdown("""
-<div class="synaptiq-header">
-  <div class="synaptiq-logo-mark">&#9678;</div>
+<div class="synaptiq-header" style="margin-top:6px;">
   <div>
     <div class="synaptiq-wordmark">Synaptiq</div>
     <div class="synaptiq-tagline">The Humankind of AI</div>
