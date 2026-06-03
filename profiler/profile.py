@@ -70,6 +70,40 @@ def profile_table(
 # Databricks path (pandas via SQL warehouse)
 
 
+def _fetch_via_statement_api(fqn: str, limit: int) -> pd.DataFrame:
+    """Fetch table data using the Databricks Statement Execution REST API.
+
+    Uses WorkspaceClient (same auth as catalog lookups) instead of the JDBC
+    SQL connector — avoids the port-443 JDBC handshake that can hang in
+    some network configurations.
+    """
+    from .catalog import _workspace_client
+    import os as _os
+
+    w = _workspace_client()
+    warehouse_id = _os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    if not warehouse_id:
+        raise RuntimeError("DATABRICKS_WAREHOUSE_ID not set.")
+
+    result = w.statement_execution.execute_statement(
+        warehouse_id=warehouse_id,
+        statement=f"SELECT * FROM {fqn} LIMIT {limit}",
+        wait_timeout="300s",
+    )
+
+    state = str(result.status.state) if result.status else "UNKNOWN"
+    if "SUCCEEDED" not in state.upper():
+        err = result.status.error.message if (result.status and result.status.error) else state
+        raise RuntimeError(f"Statement execution failed ({state}): {err}")
+
+    if not result.manifest or not result.manifest.schema:
+        return pd.DataFrame()
+
+    col_names = [c.name for c in result.manifest.schema.columns]
+    data = result.result.data_array if (result.result and result.result.data_array) else []
+    return pd.DataFrame(data, columns=col_names)
+
+
 def _databricks_profile(
     ref: TableRef,
     env_label: str,
@@ -101,42 +135,7 @@ def _databricks_profile(
     except Exception:
         pass  # Permission to check state may be absent; proceed anyway
 
-    # Wrap the SQL fetch in a thread with a hard timeout so we get a clear
-    # error instead of hanging forever when the warehouse or network is slow.
-    import concurrent.futures as _cf
-    import time as _time
-
-    _CONNECT_TIMEOUT = 90    # seconds to establish connection
-    _QUERY_TIMEOUT   = 300   # seconds to execute + fetch results
-
-    def _fetch() -> tuple:
-        t0 = _time.time()
-        cx = _sql_connect()
-        connect_ms = int((_time.time() - t0) * 1000)
-        cur = cx.cursor()
-        cur.execute(f"SELECT * FROM {ref.fqn} LIMIT {limit}")
-        col_names = [d[0] for d in cur.description]
-        rows = cur.fetchall()
-        cur.close()
-        cx.close()
-        return rows, col_names, connect_ms
-
-    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-        _future = _pool.submit(_fetch)
-        try:
-            rows, col_names, connect_ms = _future.result(
-                timeout=_CONNECT_TIMEOUT + _QUERY_TIMEOUT
-            )
-        except _cf.TimeoutError:
-            raise TimeoutError(
-                f"SQL warehouse did not respond within "
-                f"{_CONNECT_TIMEOUT + _QUERY_TIMEOUT}s. "
-                f"The warehouse may still be starting up, or a firewall is "
-                f"blocking the connection. Warehouse: "
-                f"{os.environ.get('DATABRICKS_WAREHOUSE_ID','?')}"
-            )
-
-    pdf = pd.DataFrame(rows, columns=col_names)
+    pdf = _fetch_via_statement_api(ref.fqn, limit)
 
     sampled_rows = len(pdf)
     # Row count = sample length (exact when table <= FETCH_LIMIT rows,
