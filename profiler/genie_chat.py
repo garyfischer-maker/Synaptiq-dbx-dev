@@ -134,43 +134,76 @@ def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
 
 
 def _extract_result(space_id: str, conv_id: str, msg_id: str, msg: dict) -> GenieResult:
-    """Parse the completed message — fetch text response, SQL, and query result."""
-    # Text response lives in the message's attachments or top-level fields.
-    text = (
-        msg.get("text_response")
-        or msg.get("content")
-        or _first_text_attachment(msg)
-        or ""
-    )
+    """Parse a completed Genie message into a GenieResult.
 
-    # Query result (SQL + rows) may be in the message or need a separate GET.
+    Genie response structure:
+      msg.attachments[]
+        .text.content       — natural-language answer
+        .query.query        — generated SQL
+        .query.description  — fallback text if no .text attachment
+        .query.statement_id — use to fetch rows via query-result endpoint
+    """
+    text_parts: list[str] = []
     sql: Optional[str] = None
+    statement_id: Optional[str] = None
     col_names: list[str] = []
     rows: list[list] = []
 
+    for att in msg.get("attachments", []):
+        # Text attachment — the natural-language answer
+        txt = att.get("text") or {}
+        if txt.get("content"):
+            text_parts.append(txt["content"])
+
+        # Query attachment — SQL + optional description
+        qry = att.get("query") or {}
+        if qry.get("query"):
+            sql = qry["query"]
+        if qry.get("description") and not text_parts:
+            text_parts.append(qry["description"])
+        if qry.get("statement_id"):
+            statement_id = qry["statement_id"]
+
+    # Fallback: some versions surface text at the message top-level
+    if not text_parts:
+        for key in ("text_response", "message"):
+            val = msg.get(key)
+            if val and isinstance(val, str) and val.strip():
+                text_parts.append(val)
+                break
+
+    text = "\n\n".join(text_parts).strip()
+
+    # Fetch query result rows if we have a statement_id
     try:
-        qr = _api(
-            "GET",
+        qr_path = (
             f"/api/2.0/genie/spaces/{space_id}/conversations/{conv_id}"
-            f"/messages/{msg_id}/query-result",
+            f"/messages/{msg_id}/query-result"
         )
-        statement = qr.get("statement_response", {})
-        sql = statement.get("statement", "") or None
+        qr = _api("GET", qr_path)
 
-        schema = statement.get("result", {}).get("data_array", None)
-        manifest = statement.get("manifest", {})
+        # Try statement_response (older API shape)
+        sr = qr.get("statement_response", {})
+        if not sr:
+            # Try direct result shape (newer API shape)
+            sr = qr
 
-        if manifest.get("schema"):
-            col_names = [c.get("name", "") for c in manifest["schema"].get("columns", [])]
+        if sr.get("manifest", {}).get("schema"):
+            col_names = [
+                c.get("name", f"col_{i}")
+                for i, c in enumerate(sr["manifest"]["schema"].get("columns", []))
+            ]
+        if not sql and sr.get("statement"):
+            sql = sr["statement"]
 
-        raw = statement.get("result", {}).get("data_array") or []
+        raw = (sr.get("result") or {}).get("data_array") or []
         rows = [list(r) for r in raw]
 
     except Exception:
-        pass  # query result is optional — text response still valuable
+        pass  # rows are optional; text answer is still shown
 
     return GenieResult(
-        text_response=text.strip(),
+        text_response=text,
         sql=sql,
         col_names=col_names,
         rows=rows,
@@ -178,12 +211,9 @@ def _extract_result(space_id: str, conv_id: str, msg_id: str, msg: dict) -> Geni
 
 
 def _first_text_attachment(msg: dict) -> str:
-    """Extract the first text-type attachment from a Genie message."""
+    """Kept for backwards compatibility."""
     for att in msg.get("attachments", []):
         txt = att.get("text", {})
         if txt.get("content"):
             return txt["content"]
-        qry = att.get("query", {})
-        if qry.get("description"):
-            return qry["description"]
     return ""

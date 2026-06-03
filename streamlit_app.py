@@ -1604,21 +1604,24 @@ with tab_genie:
                     st.session_state["genie_pending_question"] = s
                     st.rerun()
 
-        # Chat input
-        prompt = st.chat_input(
-            "Ask Genie about your profiling data…",
-            key="genie_input",
-        )
-        # Also pick up a suggestion button click
-        if not prompt and st.session_state.pop("genie_pending_question", None):
-            prompt = st.session_state.get("genie_pending_question_val")
+        # Pick up a suggestion button click carried from previous render
+        if "genie_pending_question" in st.session_state:
+            prompt = st.session_state.pop("genie_pending_question")
+        else:
+            prompt = st.chat_input(
+                "Ask Genie about your profiling data…",
+                key="genie_input",
+            )
 
         if prompt:
-            # Add user message immediately
+            # Render user bubble immediately
+            with st.chat_message("user", avatar="🧑"):
+                st.markdown(prompt)
             st.session_state["genie_messages"].append({
                 "role": "user", "content": prompt,
             })
 
+            # Render Genie response bubble
             with st.chat_message("assistant", avatar="🤖"):
                 with st.spinner("Genie is thinking…"):
                     try:
@@ -1632,12 +1635,12 @@ with tab_genie:
                         if result.error:
                             response_text = f"⚠️ {result.error}"
                         else:
-                            response_text = result.text_response or "(No text response)"
+                            response_text = result.text_response or "*(Genie returned no text — check the Generated SQL tab below for the query result)*"
 
                         st.markdown(response_text)
 
                         if result.sql:
-                            with st.expander("Generated SQL", expanded=False):
+                            with st.expander("Generated SQL", expanded=True):
                                 st.code(result.sql, language="sql")
 
                         if result.has_data:
@@ -1647,6 +1650,16 @@ with tab_genie:
                                 use_container_width=True,
                                 height=min(300, 38 + len(result.rows) * 35),
                             )
+
+                        # Debug: show raw response structure when no text found
+                        if not result.text_response and not result.error:
+                            with st.expander("Debug — raw Genie response", expanded=False):
+                                st.json({
+                                    "text_response": result.text_response,
+                                    "sql": result.sql,
+                                    "col_names": result.col_names,
+                                    "row_count": len(result.rows),
+                                })
 
                         st.session_state["genie_messages"].append({
                             "role": "assistant",
@@ -1662,6 +1675,4 @@ with tab_genie:
                         st.session_state["genie_messages"].append({
                             "role": "assistant", "content": err_msg,
                         })
-
-            st.rerun()
 
